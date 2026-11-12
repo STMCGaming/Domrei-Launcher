@@ -1,0 +1,10 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Official Material 3 Rounded Swap/Change icon path -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M6.14,11.86L2.78,15.15C2.39,15.54 2.39,16.17 2.78,16.56L6.14,19.85C6.77,20.47 7.85,20.02 7.85,19.14V17H14C14.55,17 15,16.55 15,16C15,15.45 14.55,15 14,15H7.85V12.57C7.85,11.68 6.77,11.24 6.14,11.86ZM21.22,7.44L17.86,4.15C17.23,3.53 16.15,3.98 16.15,4.86V7H10C9.45,7 9,7.45 9,8C9,8.55 9.45,9 10,9H16.15V11.43C16.15,12.32 17.23,12.76 17.86,12.14L21.22,8.85C21.61,8.46 21.61,7.83 21.22,7.44Z" />
+</vector>

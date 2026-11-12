@@ -1,0 +1,19 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="com.domrei.skinview" >
+4
+5    <uses-sdk android:minSdkVersion="24" />
+6
+7    <uses-permission android:name="android.permission.INTERNET" />
+7-->/workspaces/Domrei-Launcher/skinview/src/main/AndroidManifest.xml:4:5-67
+7-->/workspaces/Domrei-Launcher/skinview/src/main/AndroidManifest.xml:4:22-64
+8
+9    <!-- OpenGL ES 2.0 is required for rendering the 3D skin. -->
+10    <uses-feature
+10-->/workspaces/Domrei-Launcher/skinview/src/main/AndroidManifest.xml:7:5-9:35
+11        android:glEsVersion="0x00020000"
+11-->/workspaces/Domrei-Launcher/skinview/src/main/AndroidManifest.xml:8:9-41
+12        android:required="true" />
+12-->/workspaces/Domrei-Launcher/skinview/src/main/AndroidManifest.xml:9:9-32
+13
+14</manifest>

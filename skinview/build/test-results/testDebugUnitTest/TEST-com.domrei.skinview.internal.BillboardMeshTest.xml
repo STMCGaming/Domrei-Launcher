@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.domrei.skinview.internal.BillboardMeshTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-11-12T06:21:18" hostname="codespaces-50398c" time="0.013">
+  <properties/>
+  <testcase name="verifyBillboardMeshVertexCountAndBounds" classname="com.domrei.skinview.internal.BillboardMeshTest" time="0.013"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

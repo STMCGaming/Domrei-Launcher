@@ -1,0 +1,39 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Top slider track -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M4,7H10M14,7H20"
+        android:strokeWidth="2.1"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round" />
+    <!-- Top slider knob -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,7m-2.4,0a2.4,2.4 0,1 1,4.8 0a2.4,2.4 0,1 1,-4.8 0" />
+    <!-- Middle slider track -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M4,12H14M18,12H20"
+        android:strokeWidth="2.1"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round" />
+    <!-- Middle slider knob -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M16,12m-2.4,0a2.4,2.4 0,1 1,4.8 0a2.4,2.4 0,1 1,-4.8 0" />
+    <!-- Bottom slider track -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M4,17H6M10,17H20"
+        android:strokeWidth="2.1"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round" />
+    <!-- Bottom slider knob -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M8,17m-2.4,0a2.4,2.4 0,1 1,4.8 0a2.4,2.4 0,1 1,-4.8 0" />
+</vector>

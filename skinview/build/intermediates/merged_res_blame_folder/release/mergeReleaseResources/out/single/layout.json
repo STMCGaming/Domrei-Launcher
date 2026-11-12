@@ -1,0 +1,22 @@
+[
+    {
+        "merged": "com.domrei.skinview-release-33:/layout/notification_template_part_time.xml",
+        "source": "com.domrei.skinview-core-1.15.0-27:/layout/notification_template_part_time.xml"
+    },
+    {
+        "merged": "com.domrei.skinview-release-33:/layout/notification_template_part_chronometer.xml",
+        "source": "com.domrei.skinview-core-1.15.0-27:/layout/notification_template_part_chronometer.xml"
+    },
+    {
+        "merged": "com.domrei.skinview-release-33:/layout/ime_secondary_split_test_activity.xml",
+        "source": "com.domrei.skinview-core-1.15.0-27:/layout/ime_secondary_split_test_activity.xml"
+    },
+    {
+        "merged": "com.domrei.skinview-release-33:/layout/custom_dialog.xml",
+        "source": "com.domrei.skinview-core-1.15.0-27:/layout/custom_dialog.xml"
+    },
+    {
+        "merged": "com.domrei.skinview-release-33:/layout/ime_base_split_test_activity.xml",
+        "source": "com.domrei.skinview-core-1.15.0-27:/layout/ime_base_split_test_activity.xml"
+    }
+]

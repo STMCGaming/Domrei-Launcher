@@ -1,0 +1,42 @@
+[
+    {
+        "merged": "com.domrei.skinview-release-33:/drawable/notification_tile_bg.xml",
+        "source": "com.domrei.skinview-core-1.15.0-27:/drawable/notification_tile_bg.xml"
+    },
+    {
+        "merged": "com.domrei.skinview-release-33:/drawable/ic_call_decline_low.xml",
+        "source": "com.domrei.skinview-core-1.15.0-27:/drawable/ic_call_decline_low.xml"
+    },
+    {
+        "merged": "com.domrei.skinview-release-33:/drawable/ic_call_answer_video_low.xml",
+        "source": "com.domrei.skinview-core-1.15.0-27:/drawable/ic_call_answer_video_low.xml"
+    },
+    {
+        "merged": "com.domrei.skinview-release-33:/drawable/ic_call_answer_video.xml",
+        "source": "com.domrei.skinview-core-1.15.0-27:/drawable/ic_call_answer_video.xml"
+    },
+    {
+        "merged": "com.domrei.skinview-release-33:/drawable/notification_bg.xml",
+        "source": "com.domrei.skinview-core-1.15.0-27:/drawable/notification_bg.xml"
+    },
+    {
+        "merged": "com.domrei.skinview-release-33:/drawable/ic_call_decline.xml",
+        "source": "com.domrei.skinview-core-1.15.0-27:/drawable/ic_call_decline.xml"
+    },
+    {
+        "merged": "com.domrei.skinview-release-33:/drawable/notification_icon_background.xml",
+        "source": "com.domrei.skinview-core-1.15.0-27:/drawable/notification_icon_background.xml"
+    },
+    {
+        "merged": "com.domrei.skinview-release-33:/drawable/notification_bg_low.xml",
+        "source": "com.domrei.skinview-core-1.15.0-27:/drawable/notification_bg_low.xml"
+    },
+    {
+        "merged": "com.domrei.skinview-release-33:/drawable/ic_call_answer.xml",
+        "source": "com.domrei.skinview-core-1.15.0-27:/drawable/ic_call_answer.xml"
+    },
+    {
+        "merged": "com.domrei.skinview-release-33:/drawable/ic_call_answer_low.xml",
+        "source": "com.domrei.skinview-core-1.15.0-27:/drawable/ic_call_answer_low.xml"
+    }
+]

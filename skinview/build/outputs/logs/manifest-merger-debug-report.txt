@@ -1,0 +1,26 @@
+-- Merging decision tree log ---
+manifest
+ADDED from /workspaces/Domrei-Launcher/skinview/src/main/AndroidManifest.xml:2:1-11:12
+INJECTED from /workspaces/Domrei-Launcher/skinview/src/main/AndroidManifest.xml:2:1-11:12
+	package
+		INJECTED from /workspaces/Domrei-Launcher/skinview/src/main/AndroidManifest.xml
+	xmlns:android
+		ADDED from /workspaces/Domrei-Launcher/skinview/src/main/AndroidManifest.xml:2:11-69
+uses-permission#android.permission.INTERNET
+ADDED from /workspaces/Domrei-Launcher/skinview/src/main/AndroidManifest.xml:4:5-67
+	android:name
+		ADDED from /workspaces/Domrei-Launcher/skinview/src/main/AndroidManifest.xml:4:22-64
+uses-feature#0x00020000
+ADDED from /workspaces/Domrei-Launcher/skinview/src/main/AndroidManifest.xml:7:5-9:35
+	android:glEsVersion
+		ADDED from /workspaces/Domrei-Launcher/skinview/src/main/AndroidManifest.xml:8:9-41
+	android:required
+		ADDED from /workspaces/Domrei-Launcher/skinview/src/main/AndroidManifest.xml:9:9-32
+uses-sdk
+INJECTED from /workspaces/Domrei-Launcher/skinview/src/main/AndroidManifest.xml reason: use-sdk injection requested
+INJECTED from /workspaces/Domrei-Launcher/skinview/src/main/AndroidManifest.xml
+INJECTED from /workspaces/Domrei-Launcher/skinview/src/main/AndroidManifest.xml
+	android:targetSdkVersion
+		INJECTED from /workspaces/Domrei-Launcher/skinview/src/main/AndroidManifest.xml
+	android:minSdkVersion
+		INJECTED from /workspaces/Domrei-Launcher/skinview/src/main/AndroidManifest.xml

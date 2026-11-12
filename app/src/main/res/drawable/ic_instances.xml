@@ -1,0 +1,18 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Top diamond face of isometric 3D block/cube -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,2.2 L20.8,7.2 L12,12.2 L3.2,7.2 Z" />
+    <!-- Left face of isometric 3D block/cube -->
+    <path
+        android:fillColor="#D9FFFFFF"
+        android:pathData="M2.5,8.6 L11.1,13.5 L11.1,21.8 L2.5,16.9 Z" />
+    <!-- Right face of isometric 3D block/cube -->
+    <path
+        android:fillColor="#B3FFFFFF"
+        android:pathData="M21.5,8.6 L21.5,16.9 L12.9,21.8 L12.9,13.5 Z" />
+</vector>

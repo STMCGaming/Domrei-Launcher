@@ -23,3 +23,4 @@ dependencyResolutionManagement {
 rootProject.name = "Domrei-Launcher"
 include(":app")
 include(":skinview")
+include(":game-engine")

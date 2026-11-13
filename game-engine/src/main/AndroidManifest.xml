@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:allowNativeHeapPointerTagging="false">
+        <activity
+            android:name="com.domrei.gameengine.GameActivity"
+            android:process=":jvm"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|navigation"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen" />
+
+        <service
+            android:name="com.domrei.gameengine.runtime.DomreiJvmService"
+            android:process=":jvm"
+            android:exported="false" />
+    </application>
+</manifest>

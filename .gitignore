@@ -14,3 +14,6 @@
 .cxx
 local.properties
 app/build
+skinview/build
+game-engine/build
+**/build/

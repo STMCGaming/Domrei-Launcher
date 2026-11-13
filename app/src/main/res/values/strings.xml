@@ -11,14 +11,14 @@
     <string name="action_play">PLAY</string>
     <string name="action_change_instance">Change</string>
 
-    <!-- Default Instances -->
-    <string name="instance_vanilla_1_21_4">1.21.4</string>
-    <string name="instance_fabric_1_21_4">Fabric 1.21.4</string>
-    <string name="instance_forge_1_20_1">Forge 1.20.1</string>
-    <string name="instance_optifine_1_20_4">OptiFine 1.20.4</string>
-    <string name="instance_vanilla_1_8_9">1.8.9</string>
+    <!-- Instances & Formats -->
     <string name="instance_vanilla_format">%1$s</string>
     <string name="instance_fabric_format">Fabric %1$s (%2$s)</string>
+    <string name="instance_subtitle_vanilla">%1$s • Vanilla</string>
+    <string name="instance_subtitle_fabric">%1$s • Fabric %2$s</string>
+    <string name="no_instances_installed">No instances installed yet</string>
+    <string name="no_instances_hint">Tap Add Instance to download Minecraft from the official API</string>
+    <string name="no_instance_selected">No Instance</string>
 
     <!-- Instances Panel & Add Instance Dialog Flow -->
     <string name="add_instance">Add Instance</string>
@@ -31,43 +31,32 @@
     <string name="enter_instance_name">Enter Instance Name</string>
     <string name="instance_fabric_short_format">Fabric %1$s</string>
     <string name="loader_stable_badge">Stable</string>
+    <string name="version_filter_release">Release</string>
+    <string name="version_filter_snapshot">Snapshot</string>
+    <string name="version_filter_beta_alpha">Beta / Alpha</string>
+    <string name="version_badge_latest">Latest</string>
+    <string name="version_badge_beta">Beta</string>
+    <string name="version_badge_alpha">Alpha</string>
+    <string name="loading_versions">Loading official versions…</string>
+    <string name="loading_fabric_loaders">Loading Fabric loaders…</string>
+    <string name="error_loading_versions">Failed to load versions from official API</string>
+    <string name="action_retry">Retry</string>
+    <string name="no_versions_for_filter">No versions available for this filter</string>
     <string name="action_back">Back</string>
     <string name="action_next">Next</string>
     <string name="action_install">Install</string>
-
-    <!-- Minecraft Versions -->
-    <string name="mc_version_1_21_4">1.21.4</string>
-    <string name="mc_version_1_21_1">1.21.1</string>
-    <string name="mc_version_1_20_6">1.20.6</string>
-    <string name="mc_version_1_20_4">1.20.4</string>
-    <string name="mc_version_1_20_1">1.20.1</string>
-    <string name="mc_version_1_19_4">1.19.4</string>
-    <string name="mc_version_1_18_2">1.18.2</string>
-    <string name="mc_version_1_16_5">1.16.5</string>
-    <string name="mc_version_1_12_2">1.12.2</string>
-    <string name="mc_version_1_8_9">1.8.9</string>
-
-    <!-- Fabric Loader Versions -->
-    <string name="fabric_loader_0_16_10">0.16.10</string>
-    <string name="fabric_loader_0_16_9">0.16.9</string>
-    <string name="fabric_loader_0_16_7">0.16.7</string>
-    <string name="fabric_loader_0_15_11">0.15.11</string>
-    <string name="fabric_loader_0_14_25">0.14.25</string>
 
     <!-- Dynamic Island ProgressBar -->
     <string name="progressbar_name">ProgressBar</string>
     <string name="installing_instance_format">Installing %1$s</string>
     <string name="install_complete_format">Installed %1$s</string>
+    <string name="install_failed_format">Install failed: %1$s</string>
     <string name="percent_format">%1$d%%</string>
     <string name="downloading_item_format">Downloading: %1$s</string>
-    <string name="download_step_version_json">versions/%1$s/%1$s.json</string>
-    <string name="download_step_client_jar">versions/%1$s/client-%1$s.jar (28.4 MB)</string>
-    <string name="download_step_libraries">libraries/org/lwjgl/lwjgl-3.3.3.jar (58 files)</string>
-    <string name="download_step_assets">assets/objects/minecraft_sounds.pack (890 files)</string>
-    <string name="download_step_fabric_loader">net/fabricmc/fabric-loader-%1$s.jar (1.8 MB)</string>
     <string name="download_status_done">Done</string>
     <string name="download_status_waiting">Queued</string>
-    <string name="download_speed_format">%1$s MB / %2$s MB • 6.4 MB/s</string>
+    <string name="download_status_error">Error</string>
+    <string name="download_speed_format">%1$s MB / %2$s MB • %3$s MB/s</string>
 
     <!-- Account Panel & Dialogs -->
     <string name="add_account">Add Account</string>
@@ -87,4 +76,16 @@
     <string name="default_account_alex">Alex</string>
     <string name="account_type_microsoft">Microsoft Account</string>
     <string name="account_type_offline">Offline Account</string>
+
+    <!-- Game Engine & Settings -->
+    <string name="settings_renderer_title">Renderer Engine</string>
+    <string name="settings_openjdk_title">OpenJDK Runtime (ZalithLauncher2)</string>
+    <string name="settings_engine_console_title">Domrei Game Engine Console</string>
+    <string name="renderer_badge_active">Active</string>
+    <string name="runtime_status_installed">Installed</string>
+    <string name="runtime_status_not_installed">Not Installed</string>
+    <string name="action_download">Download</string>
+    <string name="action_reinstall">Reinstall</string>
+    <string name="action_stop_game">STOP</string>
+    <string name="engine_idle_hint">Select an instance and tap PLAY to launch with Domrei Game Engine.</string>
 </resources>

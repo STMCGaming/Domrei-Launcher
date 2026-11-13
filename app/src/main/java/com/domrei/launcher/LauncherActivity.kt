@@ -86,6 +86,7 @@ import androidx.compose.ui.composed
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -94,6 +95,9 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.layer.GraphicsLayer
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
@@ -475,6 +479,7 @@ fun LauncherScreen(
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val screenWidth = maxWidth
         val screenHeight = maxHeight
+        val sceneGraphicsLayer = rememberGraphicsLayer()
 
         // Main screen content container: smoothly blurred across the full screen when any dialog is open
         Box(
@@ -491,29 +496,41 @@ fun LauncherScreen(
                     },
                 ),
         ) {
-            // 1. Full-screen animated background
-            LauncherBackground(
-                modifier = Modifier.fillMaxSize(),
-                config = currentBackground,
-                sharedTimeSeconds = sharedTimeSeconds,
-            )
-
-            // Tap-outside scrim to close the Change panel when open
-            if (isChangePanelOpen && currentDestination == null) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = { isChangePanelOpen = false },
-                        ),
+            // Scene container recorded into sceneGraphicsLayer so ProgressBar blurs the live panels
+            // (Instances, Account, Settings, RightPlayAndSkinPanel) and background underneath it.
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .drawWithContent {
+                        sceneGraphicsLayer.record {
+                            this@drawWithContent.drawContent()
+                        }
+                        drawLayer(sceneGraphicsLayer)
+                    },
+            ) {
+                // 1. Full-screen animated background
+                LauncherBackground(
+                    modifier = Modifier.fillMaxSize(),
+                    config = currentBackground,
+                    sharedTimeSeconds = sharedTimeSeconds,
                 )
-            }
 
-            // 2. Unified Left Navigation Rail Bar + Destination Panel in the same Box
-            // Separated by a vertical divider line and opening/closing with AnimatedVisibility
-            UnifiedLeftRailAndPanel(
+                // Tap-outside scrim to close the Change panel when open
+                if (isChangePanelOpen && currentDestination == null) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = { isChangePanelOpen = false },
+                            ),
+                    )
+                }
+
+                // 2. Unified Left Navigation Rail Bar + Destination Panel in the same Box
+                // Separated by a vertical divider line and opening/closing with AnimatedVisibility
+                UnifiedLeftRailAndPanel(
                 selectedDestination = currentDestination,
                 onDestinationClick = { clicked ->
                     isChangePanelOpen = false
@@ -793,6 +810,7 @@ fun LauncherScreen(
                     sharedTimeSeconds = sharedTimeSeconds,
                 )
             }
+            }
 
             // Tap-outside scrim to collapse the expanded Dynamic Island ProgressBar
             if (isProgressBarExpanded && effectiveProgressTask != null) {
@@ -849,6 +867,7 @@ fun LauncherScreen(
                         screenHeight = screenHeight,
                         backgroundConfig = currentBackground,
                         sharedTimeSeconds = sharedTimeSeconds,
+                        sceneGraphicsLayer = sceneGraphicsLayer,
                         topInset = 6.dp,
                     )
                 }
@@ -2204,6 +2223,7 @@ fun ProgressBar(
     backgroundConfig: BackgroundConfig,
     sharedTimeSeconds: Float,
     modifier: Modifier = Modifier,
+    sceneGraphicsLayer: GraphicsLayer? = null,
     topInset: Dp = 6.dp,
 ) {
     val rawProgress = (snapshot?.progress ?: 0f).coerceIn(0f, 1f)
@@ -2263,7 +2283,8 @@ fun ProgressBar(
             )
             .clip(islandShape),
     ) {
-        // 1. Real-time Gaussian Blurred Backdrop Layer (constant full-screen blur buffer, no stutter during morph)
+        // 1. Real-time Gaussian Blurred Backdrop Layer (blurs the live underlying panels:
+        // Instances, Account, Settings, RightPlayAndSkinPanel, and LauncherBackground)
         Box(
             modifier = Modifier
                 .matchParentSize()
@@ -2288,14 +2309,24 @@ fun ProgressBar(
                 sharedTimeSeconds = sharedTimeSeconds,
             )
 
+            if (sceneGraphicsLayer != null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .drawWithContent {
+                            drawLayer(sceneGraphicsLayer)
+                        },
+                )
+            }
+
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(
                         Brush.verticalGradient(
-                            0.0f to Color(0x380A1224),
-                            0.5f to Color(0x2E0F1B33),
-                            1.0f to Color(0x44070D1A),
+                            0.0f to Color(0x460A1224),
+                            0.5f to Color(0x3A0F1B33),
+                            1.0f to Color(0x52070D1A),
                         ),
                     ),
             )

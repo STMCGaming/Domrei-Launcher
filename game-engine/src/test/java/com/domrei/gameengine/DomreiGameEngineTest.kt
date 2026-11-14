@@ -350,6 +350,62 @@ class DomreiGameEngineTest {
     }
 
     @Test
+    fun `applyAndroidCompatibilityPatches skips legacy authlib 1 and patches modern authlib`() {
+        val tempRoot = Files.createTempDirectory("domrei_authlib_patch_test").toFile()
+        try {
+            val engine = DomreiGameEngine(
+                JdkManager(File(tempRoot, "runtimes")),
+                RendererManager(File(tempRoot, "renderers"))
+            )
+            val bridgeJar = File(tempRoot, "00-domrei-glfw-bridge.jar")
+            val expectedAuthlibBytes = byteArrayOf(0x0A, 0x0B, 0x0C)
+            ZipOutputStream(FileOutputStream(bridgeJar)).use { zos ->
+                zos.putNextEntry(ZipEntry("patches/authlib/com/mojang/authlib/yggdrasil/YggdrasilAuthenticationService.class"))
+                zos.write(expectedAuthlibBytes)
+                zos.closeEntry()
+            }
+
+            val legacyAuthlibJar = File(tempRoot, "authlib-1.5.25.jar")
+            val originalLegacyBytes = byteArrayOf(0x52, 0x00)
+            ZipOutputStream(FileOutputStream(legacyAuthlibJar)).use { zos ->
+                zos.putNextEntry(ZipEntry("com/mojang/authlib/yggdrasil/YggdrasilAuthenticationService.class"))
+                zos.write(originalLegacyBytes)
+                zos.closeEntry()
+            }
+
+            val modernAuthlibJar = File(tempRoot, "authlib-3.17.30.jar")
+            val originalModernBytes = byteArrayOf(0x61, 0x00)
+            ZipOutputStream(FileOutputStream(modernAuthlibJar)).use { zos ->
+                zos.putNextEntry(ZipEntry("com/mojang/authlib/yggdrasil/YggdrasilAuthenticationService.class"))
+                zos.write(originalModernBytes)
+                zos.closeEntry()
+            }
+
+            engine.applyAndroidCompatibilityPatches(listOf(bridgeJar, legacyAuthlibJar, modernAuthlibJar))
+
+            // Legacy Authlib 1.5.25 MUST NOT be modified or patched
+            ZipFile(legacyAuthlibJar).use { zip ->
+                val entry = zip.getEntry("com/mojang/authlib/yggdrasil/YggdrasilAuthenticationService.class")
+                assertNotNull(entry)
+                val bytes = zip.getInputStream(entry).use { it.readBytes() }
+                assertArrayEquals(originalLegacyBytes, bytes)
+            }
+            assertFalse(File(tempRoot, "authlib-1.5.25.jar.domrei_patch_v3").exists())
+
+            // Modern Authlib 3.x MUST be patched with the override
+            ZipFile(modernAuthlibJar).use { zip ->
+                val entry = zip.getEntry("com/mojang/authlib/yggdrasil/YggdrasilAuthenticationService.class")
+                assertNotNull(entry)
+                val bytes = zip.getInputStream(entry).use { it.readBytes() }
+                assertArrayEquals(expectedAuthlibBytes, bytes)
+            }
+            assertTrue(File(tempRoot, "authlib-3.17.30.jar.domrei_patch_v3").exists())
+        } finally {
+            tempRoot.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `domrei-glfw-bridge jar bundles LWJGLX for legacy Minecraft 1 12 2 support`() {
         val bridgeStream = javaClass.classLoader?.getResourceAsStream("domrei-glfw-bridge.jar")
             ?: File("src/main/assets/domrei-glfw-bridge.jar").inputStream()

@@ -753,21 +753,39 @@ class DomreiGameEngine(
         val overrideEntries = mutableMapOf<String, ByteArray>()
         runCatching {
             ZipFile(bridgeJar).use { zip ->
-                val names = listOf(
+                val standardNames = listOf(
                     "org/lwjgl/system/Library.class",
                     "org/lwjgl/opengl/PojavRendererInit.class",
                     "org/lwjgl/opengl/GL31.class",
                     "org/lwjgl/opengl/GL31C.class",
                     "org/lwjgl/opengl/GL32.class",
                     "org/lwjgl/opengl/GL32C.class",
-                    "oshi/hardware/platform/linux/LinuxCentralProcessor.class",
-                    "com/mojang/text2speech/NarratorLinux.class",
+                    "oshi/hardware/platform/linux/LinuxCentralProcessor.class"
+                )
+                for (name in standardNames) {
+                    val entry = zip.getEntry(name) ?: continue
+                    zip.getInputStream(entry).use { input ->
+                        overrideEntries[name] = input.readBytes()
+                    }
+                }
+
+                // Text2Speech patch
+                val narratorEntry = zip.getEntry("patches/text2speech/com/mojang/text2speech/NarratorLinux.class")
+                    ?: zip.getEntry("com/mojang/text2speech/NarratorLinux.class")
+                narratorEntry?.let { entry ->
+                    zip.getInputStream(entry).use { input ->
+                        overrideEntries["com/mojang/text2speech/NarratorLinux.class"] = input.readBytes()
+                    }
+                }
+
+                // Modern Authlib patch (only applied to authlib >= 3.x, never placed on root classpath)
+                val authlibNames = listOf(
                     "com/mojang/authlib/yggdrasil/YggdrasilAuthenticationService.class",
                     "com/mojang/authlib/yggdrasil/YggdrasilAuthenticationService$1.class"
                 )
-                for (name in names) {
-                    val entry = zip.getEntry(name) ?: continue
-                    zip.getInputStream(entry).use { input ->
+                for (name in authlibNames) {
+                    val patchEntry = zip.getEntry("patches/authlib/$name") ?: zip.getEntry(name) ?: continue
+                    zip.getInputStream(patchEntry).use { input ->
                         overrideEntries[name] = input.readBytes()
                     }
                 }
@@ -784,7 +802,8 @@ class DomreiGameEngine(
                     overrideEntries.filterKeys { it.startsWith("org/lwjgl/opengl/") }
                 name.startsWith("oshi-core") -> overrideEntries.filterKeys { it.startsWith("oshi/") }
                 name.startsWith("text2speech") -> overrideEntries.filterKeys { it.startsWith("com/mojang/text2speech/") }
-                name.startsWith("authlib") -> overrideEntries.filterKeys { it.startsWith("com/mojang/authlib/") }
+                name.startsWith("authlib") && !name.startsWith("authlib-1.") ->
+                    overrideEntries.filterKeys { it.startsWith("com/mojang/authlib/") }
                 else -> emptyMap()
             }
             if (patchesForJar.isEmpty()) continue

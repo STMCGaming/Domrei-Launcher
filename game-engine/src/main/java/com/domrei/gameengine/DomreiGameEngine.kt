@@ -309,8 +309,12 @@ class DomreiGameEngine(
         jvmArgs += "-XX:+DisableExplicitGC"
         jvmArgs += "-Djava.library.path=$combinedLibPath"
         jvmArgs += "-Dorg.lwjgl.librarypath=${renderer.nativeLibDir.absolutePath}${File.pathSeparator}$combinedLibPath"
-        jvmArgs += "-Djna.boot.library.path=${renderer.nativeLibDir.absolutePath}"
-        jvmArgs += "-Djna.nosys=false"
+        if (runtime.version == JavaRuntimeVersion.JRE_8) {
+            jvmArgs += "-Djna.nosys=true"
+        } else {
+            jvmArgs += "-Djna.boot.library.path=${renderer.nativeLibDir.absolutePath}"
+            jvmArgs += "-Djna.nosys=false"
+        }
         jvmArgs += "-Dorg.lwjgl.system.SharedLibraryExtractPath=${nativesDir.absolutePath}"
         jvmArgs += "-Dorg.lwjgl.system.allocator=system"
         jvmArgs += "-Dglfwstub.windowWidth=${request.windowWidth}"

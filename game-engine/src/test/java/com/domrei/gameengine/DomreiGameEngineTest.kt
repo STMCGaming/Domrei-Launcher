@@ -348,4 +348,59 @@ class DomreiGameEngineTest {
             tempRoot.deleteRecursively()
         }
     }
+
+    @Test
+    fun `domrei-glfw-bridge jar bundles LWJGLX for legacy Minecraft 1 12 2 support`() {
+        val bridgeStream = javaClass.classLoader?.getResourceAsStream("domrei-glfw-bridge.jar")
+            ?: File("src/main/assets/domrei-glfw-bridge.jar").inputStream()
+        val tempJar = File.createTempFile("bridge_test", ".jar")
+        try {
+            tempJar.outputStream().use { bridgeStream.copyTo(it) }
+            ZipFile(tempJar).use { zip ->
+                assertNotNull("org/lwjgl/opengl/Display.class should be bundled for LWJGL 2 support", zip.getEntry("org/lwjgl/opengl/Display.class"))
+                assertNotNull("org/lwjgl/input/Keyboard.class should be bundled", zip.getEntry("org/lwjgl/input/Keyboard.class"))
+                assertNotNull("org/lwjgl/input/Mouse.class should be bundled", zip.getEntry("org/lwjgl/input/Mouse.class"))
+                assertNotNull("org/lwjgl/opengl/GL31.class should be present", zip.getEntry("org/lwjgl/opengl/GL31.class"))
+                assertNotNull("org/lwjgl/opengl/GL32.class should be present", zip.getEntry("org/lwjgl/opengl/GL32.class"))
+            }
+        } finally {
+            tempJar.delete()
+        }
+    }
+
+    @Test
+    fun `JdkManager invalidates JRE 8 if rt jar is missing and packed`() {
+        val tempRoot = Files.createTempDirectory("domrei_jre8_test").toFile()
+        try {
+            val manager = JdkManager(externalRootDir = tempRoot, internalExecRootDir = tempRoot)
+            val jre8Dir = manager.getRuntimeStorageDir(JavaRuntimeVersion.JRE_8).apply { mkdirs() }
+            File(jre8Dir, "bin/java").apply {
+                parentFile?.mkdirs()
+                writeBytes(byteArrayOf(1, 2, 3))
+                setExecutable(true, false)
+            }
+            File(jre8Dir, "lib/aarch64/server/libjvm.so").apply {
+                parentFile?.mkdirs()
+                writeBytes(byteArrayOf(4, 5, 6))
+            }
+            File(jre8Dir, ".domrei_runtime_version").writeText("2")
+
+            // Simulate broken / packed state without rt.jar
+            File(jre8Dir, "lib/rt.jar.pack").apply {
+                parentFile?.mkdirs()
+                writeBytes(byteArrayOf(7, 8, 9))
+            }
+
+            // Since rt.jar is missing and pack cannot be unpacked without unpacker in mock test, should return null
+            val installed = manager.getInstalledRuntime(JavaRuntimeVersion.JRE_8, RuntimeAbi.ARM64)
+            assertNull(installed)
+
+            // Once rt.jar is restored, runtime becomes valid
+            File(jre8Dir, "lib/rt.jar").writeBytes(byteArrayOf(10, 11, 12))
+            val validInstalled = manager.getInstalledRuntime(JavaRuntimeVersion.JRE_8, RuntimeAbi.ARM64)
+            assertNotNull(validInstalled)
+        } finally {
+            tempRoot.deleteRecursively()
+        }
+    }
 }

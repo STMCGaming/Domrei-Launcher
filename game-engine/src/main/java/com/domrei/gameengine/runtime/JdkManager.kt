@@ -144,11 +144,13 @@ data class InstalledJavaRuntime(
  */
 class JdkManager(
     val externalRootDir: File,
-    private val internalExecRootDir: File = externalRootDir
+    private val internalExecRootDir: File = externalRootDir,
+    private val nativeLibraryDir: File? = null
 ) {
     constructor(context: Context) : this(
         externalRootDir = File(context.filesDir, "runtimes"),
-        internalExecRootDir = File(context.filesDir, "runtimes")
+        internalExecRootDir = File(context.filesDir, "runtimes"),
+        nativeLibraryDir = context.applicationInfo.nativeLibraryDir?.let { File(it) }
     )
 
     val runtimesDir: File
@@ -206,6 +208,21 @@ class JdkManager(
         val libJvm = libDirs.map { File(it, "libjvm.so") }.firstOrNull { it.isFile }
         val libJli = libDirs.map { File(it, "libjli.so") }.firstOrNull { it.isFile }
         if (libJvm == null) return null
+
+        // Verify Java 8 runtime archives are unpacked from Pack200
+        if (version == JavaRuntimeVersion.JRE_8) {
+            val rtJar = File(activeHome, "lib/rt.jar")
+            val jreRtJar = File(activeHome, "jre/lib/rt.jar")
+            if (!rtJar.isFile && !jreRtJar.isFile) {
+                val hasPack = activeHome.walkTopDown().any { it.isFile && it.name.endsWith(".pack") }
+                if (hasPack) {
+                    runCatching { unpackPack200Files(activeHome) }
+                    if (!rtJar.isFile && !jreRtJar.isFile) {
+                        return null
+                    }
+                }
+            }
+        }
 
         val versionTag = runCatching { markerFile.readText().trim() }.getOrDefault("1")
         return InstalledJavaRuntime(
@@ -335,6 +352,7 @@ class JdkManager(
                 )
             )
             extractTarXzArchive(binArchive, storageDir)
+            unpackPack200Files(storageDir)
 
             if (execDir.absolutePath != storageDir.absolutePath) {
                 onProgress(
@@ -346,6 +364,7 @@ class JdkManager(
                 )
                 extractTarXzArchive(universalArchive, execDir)
                 extractTarXzArchive(binArchive, execDir)
+                unpackPack200Files(execDir)
                 applyExecutablePermissions(execDir)
             }
             applyExecutablePermissions(storageDir)
@@ -450,6 +469,65 @@ class JdkManager(
                 }
             }
         }
+    }
+
+    /**
+     * Decompresses all Pack200 archives (`.pack`) within `dir` into standard `.jar` files
+     * using the bundled `libunpack200.so` in `nativeLibraryDir` (or runtime `bin/unpack200`).
+     */
+    fun unpackPack200Files(dir: File) {
+        val packFiles = dir.walkTopDown().filter { it.isFile && it.name.endsWith(".pack") }.toList()
+        if (packFiles.isEmpty()) return
+
+        dir.setWritable(true, false)
+        packFiles.forEach { it.setWritable(true, true) }
+
+        val candidateUnpackers = listOfNotNull(
+            nativeLibraryDir?.let { File(it, "libunpack200.so") },
+            File(dir, "bin/unpack200"),
+            File(getRuntimeExecDir(JavaRuntimeVersion.JRE_8), "bin/unpack200"),
+            File(getRuntimeStorageDir(JavaRuntimeVersion.JRE_8), "bin/unpack200")
+        )
+        val unpacker = candidateUnpackers.firstOrNull { it.isFile && it.canExecute() }
+            ?: candidateUnpackers.firstOrNull { it.isFile }
+            ?: findSystemUnpack200()
+            ?: throw IOException("No unpack200 binary found to unpack Java 8 (.pack files)")
+
+        unpacker.setExecutable(true, false)
+
+        for (packFile in packFiles) {
+            val destJar = File(packFile.parentFile, packFile.name.removeSuffix(".pack"))
+            destJar.parentFile?.mkdirs()
+            destJar.delete()
+
+            val pb = ProcessBuilder(
+                unpacker.absolutePath,
+                "-q",
+                "-r",
+                packFile.absolutePath,
+                destJar.absolutePath
+            )
+            pb.directory(unpacker.parentFile ?: dir)
+            nativeLibraryDir?.let {
+                pb.environment()["LD_LIBRARY_PATH"] = it.absolutePath
+            }
+            val proc = pb.start()
+            val exitCode = proc.waitFor()
+            if (exitCode != 0) {
+                val err = proc.errorStream.bufferedReader().readText()
+                throw IOException("unpack200 failed on ${packFile.name} (exit $exitCode): $err")
+            }
+            if (packFile.exists()) {
+                packFile.delete()
+            }
+        }
+    }
+
+    private fun findSystemUnpack200(): File? {
+        val path = System.getenv("PATH") ?: return null
+        return path.split(File.pathSeparator)
+            .map { File(it, "unpack200") }
+            .firstOrNull { it.isFile && it.canExecute() }
     }
 
     private fun applyExecutablePermissions(homeDir: File) {

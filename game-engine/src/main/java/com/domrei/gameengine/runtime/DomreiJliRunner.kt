@@ -67,6 +67,7 @@ object DomreiJliRunner {
         "libzip.so",
         "libnet.so",
         "libnio.so",
+        "libtinyiconv.so",
         "libjimage.so",
         "libawt.so",
         "libawt_headless.so",
@@ -246,6 +247,9 @@ object DomreiJliRunner {
         val jliLibrary = NativeLibrary.getInstance(libJliFile.absolutePath)
         val jliLaunchFn = jliLibrary.getFunction("JLI_Launch")
 
+        val fullVersion = if (spec.runtime.version.major == 8) "1.8.0_442" else "${spec.runtime.version.major}.0.0-internal"
+        val dotVersion = if (spec.runtime.version.major == 8) "1.8" else "${spec.runtime.version.major}.0"
+
         return jliLaunchFn.invokeInt(
             arrayOf(
                 argsArray.size,
@@ -254,8 +258,8 @@ object DomreiJliRunner {
                 null,
                 0,
                 null,
-                "${spec.runtime.version.major}.0.0-internal",
-                "${spec.runtime.version.major}.0",
+                fullVersion,
+                dotVersion,
                 "java",
                 "openjdk",
                 0.toByte(),

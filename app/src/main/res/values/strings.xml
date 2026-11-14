@@ -78,8 +78,10 @@
     <string name="account_type_offline">Offline Account</string>
 
     <!-- Game Engine & Settings -->
-    <string name="settings_category_display_renderer">Display and Renderer</string>
     <string name="settings_category_appearance">Appearance</string>
+    <string name="settings_category_display_renderer">Display and Renderer</string>
+    <string name="settings_category_java_tweak">Java Tweak</string>
+    <string name="settings_category_controls">Controls</string>
     <string name="settings_bg_title">Custom Background</string>
     <string name="settings_bg_pick_media">Image / Video</string>
     <string name="settings_bg_importing">Importing media…</string>
@@ -91,6 +93,19 @@
     <string name="dialog_color_picker_hex_label">Hex Code</string>
     <string name="action_apply">Apply</string>
     <string name="settings_renderer_title">Renderer Engine</string>
+    <string name="settings_res_scale_title">Resolution Scaling</string>
+    <string name="settings_sustained_perf_title">Sustained Performance Mode</string>
+    <string name="settings_surface_vsync_title">Surface V-Sync</string>
+    <string name="settings_memory_title">Allocated RAM (Memory)</string>
+    <string name="settings_gc_title">Garbage Collector (GC)</string>
+    <string name="settings_jvm_args_title">Custom JVM Arguments</string>
+    <string name="settings_auto_runtime_title">Auto-Select OpenJDK Runtime</string>
+    <string name="settings_touch_controls_title">On-Screen Virtual Controls</string>
+    <string name="settings_controls_scale_title">Button Scale</string>
+    <string name="settings_controls_opacity_title">Button Opacity</string>
+    <string name="settings_haptic_title">Haptic Feedback</string>
+    <string name="settings_mouse_sensitivity_title">Mouse &amp; Camera Sensitivity</string>
+    <string name="settings_invert_y_title">Invert Y-Axis</string>
     <string name="settings_openjdk_title">OpenJDK Runtime (ZalithLauncher2)</string>
     <string name="settings_engine_console_title">Domrei Game Engine Console</string>
     <string name="renderer_badge_active">Active</string>

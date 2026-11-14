@@ -43,6 +43,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -4679,13 +4680,21 @@ private enum class SettingsCategory(
     @StringRes val titleRes: Int,
     @DrawableRes val iconRes: Int,
 ) {
+    APPEARANCE(
+        titleRes = R.string.settings_category_appearance,
+        iconRes = R.drawable.ic_appearance,
+    ),
     DISPLAY_AND_RENDERER(
         titleRes = R.string.settings_category_display_renderer,
         iconRes = R.drawable.ic_display_renderer,
     ),
-    APPEARANCE(
-        titleRes = R.string.settings_category_appearance,
-        iconRes = R.drawable.ic_appearance,
+    JAVA_TWEAK(
+        titleRes = R.string.settings_category_java_tweak,
+        iconRes = R.drawable.ic_java_tweak,
+    ),
+    CONTROLS(
+        titleRes = R.string.settings_category_controls,
+        iconRes = R.drawable.ic_controls,
     ),
 }
 
@@ -4701,7 +4710,7 @@ private fun SettingsPanelContent(
     onOpenAccentColorPicker: () -> Unit,
 ) {
     val colors = LauncherTheme.colors
-    var selectedCategory by remember { mutableStateOf(SettingsCategory.DISPLAY_AND_RENDERER) }
+    var selectedCategory by remember { mutableStateOf(SettingsCategory.APPEARANCE) }
 
     Column(
         modifier = Modifier
@@ -4709,9 +4718,11 @@ private fun SettingsPanelContent(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        // Top Category Tab Bar ("Display and Renderer", "Appearance") styled like rail bar buttons
+        // Top Category Tab Bar ("Appearance", "Display and Renderer", "Java Tweak", "Controls") styled like rail bar buttons
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -4816,7 +4827,9 @@ private fun SettingsPanelContent(
 
         // Category content area
         when (selectedCategory) {
-            SettingsCategory.DISPLAY_AND_RENDERER -> Box(
+            SettingsCategory.DISPLAY_AND_RENDERER,
+            SettingsCategory.JAVA_TWEAK,
+            SettingsCategory.CONTROLS -> Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),

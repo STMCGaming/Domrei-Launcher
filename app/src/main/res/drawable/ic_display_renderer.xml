@@ -1,0 +1,22 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Display monitor frame -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M5.5,4.2H18.5C19.88,4.2 21,5.32 21,6.7V13.3C21,14.68 19.88,15.8 18.5,15.8H5.5C4.12,15.8 3,14.68 3,13.3V6.7C3,5.32 4.12,4.2 5.5,4.2Z"
+        android:strokeWidth="1.9"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <!-- Monitor stand neck and base -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M12,15.8V19.5M8,19.8H16"
+        android:strokeWidth="1.9"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

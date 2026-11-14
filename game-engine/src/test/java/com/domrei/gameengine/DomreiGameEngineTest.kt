@@ -15,9 +15,11 @@ import com.domrei.gameengine.runtime.RuntimeAbi
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream
 import org.json.JSONObject
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.tukaani.xz.LZMA2Options
@@ -25,6 +27,9 @@ import org.tukaani.xz.XZOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.file.Files
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
 
 class DomreiGameEngineTest {
 
@@ -272,6 +277,73 @@ class DomreiGameEngineTest {
             DomreiJliRunner.enforceReadOnlyExecutablePermissions(fakeMgSo.parentFile!!)
             assertFalse(fakeMgSo.canWrite())
             DomreiJliRunner.restoreWritablePermissions(fakeMgSo.parentFile!!)
+        } finally {
+            tempRoot.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `applyAndroidCompatibilityPatches patches PojavRendererInit in lwjgl merged modules jar`() {
+        val tempRoot = Files.createTempDirectory("domrei_patch_test").toFile()
+        try {
+            val engine = DomreiGameEngine(
+                JdkManager(File(tempRoot, "runtimes")),
+                RendererManager(File(tempRoot, "renderers")),
+                EngineLogManager(File(tempRoot, "logs"))
+            )
+
+            val assetBridgeJar = listOf(
+                File("src/main/assets/domrei-glfw-bridge.jar"),
+                File("game-engine/src/main/assets/domrei-glfw-bridge.jar")
+            ).firstOrNull { it.isFile }
+            assertNotNull("Expected bundled domrei-glfw-bridge.jar asset", assetBridgeJar)
+
+            val bridgeJar = File(tempRoot, "00-domrei-glfw-bridge.jar")
+            assetBridgeJar!!.copyTo(bridgeJar, overwrite = true)
+
+            val expectedPojavBytes = ZipFile(bridgeJar).use { zip ->
+                val entry = zip.getEntry("org/lwjgl/opengl/PojavRendererInit.class")
+                assertNotNull("Expected PojavRendererInit override in bridge jar", entry)
+                zip.getInputStream(entry).use { it.readBytes() }
+            }
+
+            val mergedModulesJar = File(tempRoot, "lwjgl-3.3.3-merged-modules.jar")
+            val stalePojavBytes = byteArrayOf(0x01, 0x02, 0x03)
+            val preservedBytes = byteArrayOf(0x10, 0x20, 0x30)
+            ZipOutputStream(FileOutputStream(mergedModulesJar)).use { zos ->
+                zos.putNextEntry(ZipEntry("org/lwjgl/opengl/PojavRendererInit.class"))
+                zos.write(stalePojavBytes)
+                zos.closeEntry()
+
+                zos.putNextEntry(ZipEntry("org/lwjgl/opengl/GLCapabilities.class"))
+                zos.write(preservedBytes)
+                zos.closeEntry()
+
+                zos.putNextEntry(ZipEntry("META-INF/CERT.RSA"))
+                zos.write(byteArrayOf(0x7F))
+                zos.closeEntry()
+            }
+
+            engine.applyAndroidCompatibilityPatches(listOf(bridgeJar, mergedModulesJar))
+
+            ZipFile(mergedModulesJar).use { zip ->
+                val patchedEntry = zip.getEntry("org/lwjgl/opengl/PojavRendererInit.class")
+                assertNotNull(patchedEntry)
+                val actualBytes = zip.getInputStream(patchedEntry).use { it.readBytes() }
+                assertArrayEquals(expectedPojavBytes, actualBytes)
+
+                val keptEntry = zip.getEntry("org/lwjgl/opengl/GLCapabilities.class")
+                assertNotNull(keptEntry)
+                val actualKept = zip.getInputStream(keptEntry).use { it.readBytes() }
+                assertArrayEquals(preservedBytes, actualKept)
+
+                assertNotNull(zip.getEntry("org/lwjgl/opengl/GL31.class"))
+                assertNotNull(zip.getEntry("org/lwjgl/opengl/GL31C.class"))
+                assertNotNull(zip.getEntry("org/lwjgl/opengl/GL32.class"))
+                assertNotNull(zip.getEntry("org/lwjgl/opengl/GL32C.class"))
+                assertNull(zip.getEntry("META-INF/CERT.RSA"))
+            }
+            assertTrue(File(tempRoot, "lwjgl-3.3.3-merged-modules.jar.domrei_patch_v3").isFile)
         } finally {
             tempRoot.deleteRecursively()
         }

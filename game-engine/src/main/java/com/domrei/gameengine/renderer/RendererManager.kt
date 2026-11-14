@@ -2,7 +2,10 @@ package com.domrei.gameengine.renderer
 
 import android.content.Context
 import com.domrei.gameengine.runtime.RuntimeAbi
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
@@ -154,7 +157,7 @@ class RendererManager(
                     forceReinstall = forceReinstall,
                     onProgress = onProgress
                 )
-            }
+            }.onFailure { if (it is CancellationException) throw it }
 
             val configFile = when (type) {
                 RendererType.MOBILE_GLUES -> {
@@ -192,7 +195,7 @@ class RendererManager(
                 environmentVars = envVars,
                 jvmSystemProperties = jvmProps
             )
-        }
+        }.onFailure { if (it is CancellationException) throw it }
     }
 
     /**
@@ -264,7 +267,7 @@ class RendererManager(
         return props
     }
 
-    private fun ensureAndroidLwjglAndOpenAlNatives(
+    private suspend fun ensureAndroidLwjglAndOpenAlNatives(
         abi: RuntimeAbi,
         targetDir: File,
         forceReinstall: Boolean,
@@ -390,11 +393,12 @@ class RendererManager(
         return File(baseDir, "${type.id}/${abi.androidAbi}")
     }
 
-    private fun downloadFile(
+    private suspend fun downloadFile(
         url: String,
         targetFile: File,
         onProgress: (Float) -> Unit
     ) {
+        currentCoroutineContext().ensureActive()
         targetFile.parentFile?.mkdirs()
         val tempFile = File(targetFile.parentFile, "${targetFile.name}.part")
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
@@ -414,6 +418,7 @@ class RendererManager(
                 FileOutputStream(tempFile).use { output ->
                     val buffer = ByteArray(32 * 1024)
                     while (true) {
+                        currentCoroutineContext().ensureActive()
                         val read = input.read(buffer)
                         if (read < 0) break
                         output.write(buffer, 0, read)
@@ -431,6 +436,9 @@ class RendererManager(
                 tempFile.copyTo(targetFile, overwrite = true)
                 tempFile.delete()
             }
+        } catch (t: Throwable) {
+            tempFile.delete()
+            throw t
         } finally {
             connection.disconnect()
         }

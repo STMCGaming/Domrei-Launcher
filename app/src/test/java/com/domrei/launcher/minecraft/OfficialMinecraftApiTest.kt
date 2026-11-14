@@ -33,9 +33,36 @@ class OfficialMinecraftApiTest {
         assertTrue(releases.all { it.type == "release" })
         assertTrue(snapshots.all { it.type == "snapshot" })
         assertTrue(oldVersions.all { it.type == "old_beta" || it.type == "old_alpha" })
+        assertTrue(
+            "All versions should format to a non-empty release date",
+            manifest.versions.all { OfficialMinecraftApi.formatReleaseDate(it.releaseTime).isNotEmpty() },
+        )
 
         assertNotNull("Expected 1.21.4 in manifest", manifest.versions.firstOrNull { it.id == "1.21.4" })
         assertNotNull("Expected 1.8.9 in manifest", manifest.versions.firstOrNull { it.id == "1.8.9" })
+    }
+
+    @Test
+    fun testReleaseDateFormattingAndFabricIndexParsing() {
+        assertEquals("Dec 9, 2025", OfficialMinecraftApi.formatReleaseDate("2025-12-09T12:00:00+00:00"))
+        assertEquals("Oct 19, 2026", OfficialMinecraftApi.formatReleaseDate("2026-10-19"))
+        assertEquals("Mar 8, 2020", OfficialMinecraftApi.formatReleaseDate("08-Mar-2020"))
+        assertEquals("", OfficialMinecraftApi.formatReleaseDate(""))
+        assertEquals("", OfficialMinecraftApi.formatReleaseDate("invalid-date"))
+
+        val sampleHtml = """
+            <html><body><pre>
+            <a href="../">../</a>
+            <a href="0.10.0%2Bbuild.208/">0.10.0+build.208/</a>                                  26-Sep-2020 18:53       -
+            <a href="0.20.1/">0.20.1/</a>                                          19-Oct-2026 19:02       -
+            <a href="maven-metadata.xml">maven-metadata.xml</a>                                 19-Oct-2026 19:02    9509
+            </pre></body></html>
+        """.trimIndent()
+        val parsed = OfficialMinecraftApi.parseFabricLoaderReleaseDates(sampleHtml)
+        assertEquals(2, parsed.size)
+        assertEquals("2020-09-26", parsed["0.10.0+build.208"])
+        assertEquals("2026-10-19", parsed["0.20.1"])
+        assertEquals("Oct 19, 2026", OfficialMinecraftApi.formatReleaseDate(parsed["0.20.1"]!!))
     }
 
     @Test
@@ -48,6 +75,10 @@ class OfficialMinecraftApiTest {
         assertTrue("Fabric loaders fetch should succeed: ${loadersResult.exceptionOrNull()}", loadersResult.isSuccess)
         val loaders = loadersResult.getOrThrow()
         assertTrue("Expected non-empty Fabric loaders", loaders.isNotEmpty())
+        assertTrue(
+            "Expected Fabric loader release dates from Maven index",
+            OfficialMinecraftApi.formatReleaseDate(loaders.first().releaseTime).isNotEmpty(),
+        )
 
         val stableLoader = loaders.firstOrNull { it.stable } ?: loaders.first()
         val profileUrl = OfficialMinecraftApi.fabricProfileJsonUrl("1.21.4", stableLoader.version)

@@ -3,11 +3,14 @@ package com.domrei.launcher.minecraft
 import android.content.Context
 import com.domrei.launcher.InstanceLoaderType
 import com.domrei.launcher.LauncherInstance
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
@@ -523,6 +526,7 @@ class MinecraftInstanceManager(
         }
 
         result.onFailure { err ->
+            if (err is CancellationException) throw err
             val currentIdx = stages.indexOfFirst { it.status == DownloadStageStatus.DOWNLOADING }
             if (currentIdx >= 0) {
                 stages[currentIdx] = stages[currentIdx].copy(status = DownloadStageStatus.ERROR)
@@ -588,6 +592,7 @@ class MinecraftInstanceManager(
                 }
                 return
             } catch (t: Throwable) {
+                if (t is CancellationException) throw t
                 lastError = t
                 if (attemptBytesReported > 0L) {
                     onBytesDelta(-attemptBytesReported)
@@ -600,11 +605,12 @@ class MinecraftInstanceManager(
         throw lastError ?: IllegalStateException("Failed to download ${artifact.url}")
     }
 
-    private fun ensureJsonFile(
+    private suspend fun ensureJsonFile(
         targetFile: File,
         url: String,
         expectedSha1: String?,
     ): Long {
+        currentCoroutineContext().ensureActive()
         if (isValidCachedFile(targetFile, expectedSha1, expectedSize = 0L)) {
             return targetFile.length()
         }
@@ -629,12 +635,13 @@ class MinecraftInstanceManager(
         return true
     }
 
-    private fun streamDownloadToFile(
+    private suspend fun streamDownloadToFile(
         urlString: String,
         targetFile: File,
         expectedSha1: String?,
         onBytesDelta: (Long) -> Unit,
     ): Long {
+        currentCoroutineContext().ensureActive()
         val parent = targetFile.parentFile
         if (parent != null && !parent.exists()) parent.mkdirs()
 
@@ -661,6 +668,7 @@ class MinecraftInstanceManager(
             conn.inputStream.use { input ->
                 FileOutputStream(tempFile).use { output ->
                     while (true) {
+                        currentCoroutineContext().ensureActive()
                         val read = input.read(buffer)
                         if (read <= 0) break
                         output.write(buffer, 0, read)

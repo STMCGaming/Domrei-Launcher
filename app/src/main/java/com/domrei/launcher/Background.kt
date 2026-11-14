@@ -1,12 +1,15 @@
 package com.domrei.launcher
 
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
+import android.graphics.Matrix
+import android.graphics.SurfaceTexture
 import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
-import android.view.SurfaceHolder
-import android.view.SurfaceView
+import android.view.Surface
+import android.view.TextureView
 import androidx.annotation.DrawableRes
 import androidx.annotation.RawRes
 import androidx.compose.foundation.Canvas
@@ -22,6 +25,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
@@ -39,6 +43,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.domrei.launcher.ui.theme.LauncherColorTokens
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
@@ -90,8 +95,6 @@ sealed interface BackgroundSource {
 @Immutable
 data class BackgroundConfig(
     val source: BackgroundSource = BackgroundSource.MinecraftSunset(),
-    /** Optional dark overlay alpha (0f..1f) to improve foreground UI contrast over custom media. */
-    val dimAlpha: Float = 0f,
 )
 
 /**
@@ -126,6 +129,7 @@ fun LauncherBackground(
     modifier: Modifier = Modifier,
     config: BackgroundConfig = BackgroundConfig(),
     sharedTimeSeconds: Float? = null,
+    onMediaFrameRendered: (() -> Unit)? = null,
 ) {
     Box(modifier = modifier.fillMaxSize()) {
         when (val source = config.source) {
@@ -141,23 +145,17 @@ fun LauncherBackground(
             is BackgroundSource.Gif -> CustomGifBackground(
                 modifier = Modifier.fillMaxSize(),
                 source = source,
+                onMediaFrameRendered = onMediaFrameRendered,
             )
             is BackgroundSource.Video -> CustomVideoBackground(
                 modifier = Modifier.fillMaxSize(),
                 source = source,
+                onMediaFrameRendered = onMediaFrameRendered,
             )
             is BackgroundSource.SolidColor -> Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(source.color),
-            )
-        }
-
-        if (config.dimAlpha > 0f) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = config.dimAlpha.coerceIn(0f, 1f))),
             )
         }
     }
@@ -301,12 +299,12 @@ fun MinecraftSunsetBackground(
         // 1. Multi-stop Minecraft Night Sky Gradient
         drawRect(
             brush = Brush.verticalGradient(
-                0.00f to Color(0xFF040711),
-                0.22f to Color(0xFF081024),
-                0.45f to Color(0xFF0F1D3A),
-                0.68f to Color(0xFF172C54),
-                0.86f to Color(0xFF213C6E),
-                1.00f to Color(0xFF2C4E86),
+                0.00f to LauncherColorTokens.Background.SkyStop0,
+                0.22f to LauncherColorTokens.Background.SkyStop1,
+                0.45f to LauncherColorTokens.Background.SkyStop2,
+                0.68f to LauncherColorTokens.Background.SkyStop3,
+                0.86f to LauncherColorTokens.Background.SkyStop4,
+                1.00f to LauncherColorTokens.Background.SkyStop5,
                 startY = 0f,
                 endY = horizonY + block * 6f,
             ),
@@ -321,7 +319,7 @@ fun MinecraftSunsetBackground(
                 val sy = star.yFrac * h
                 val sSize = block * star.radiusBlocks
                 drawRect(
-                    color = Color(0xFFE8F2FF).copy(alpha = twinkle * 0.90f),
+                    color = LauncherColorTokens.Background.Star.copy(alpha = twinkle * 0.90f),
                     topLeft = Offset(sx, sy),
                     size = Size(sSize, sSize),
                 )
@@ -337,9 +335,9 @@ fun MinecraftSunsetBackground(
         // 4. Cool Moonlit Horizon Mist Glow
         drawRect(
             brush = Brush.verticalGradient(
-                0.0f to Color.Transparent,
-                0.5f to Color(0x334A78B8),
-                1.0f to Color(0x6634598F),
+                0.0f to LauncherColorTokens.Transparent,
+                0.5f to LauncherColorTokens.Background.HorizonGlowMid,
+                1.0f to LauncherColorTokens.Background.HorizonGlowEnd,
                 startY = horizonY - block * 14f,
                 endY = horizonY + block * 4f,
             ),
@@ -361,8 +359,8 @@ fun MinecraftSunsetBackground(
             baseY = farBaseY,
             block = block,
             scrollCols = timeSeconds * 0.28f,
-            fillColor = Color(0xFF121E36),
-            topRimColor = Color(0xFF2B446E),
+            fillColor = LauncherColorTokens.Background.MountainFarFill,
+            topRimColor = LauncherColorTokens.Background.MountainFarRim,
         )
 
         // 7. Layer 2: Mid-ground Hill Silhouettes + 6 Minecraft Trees (medium parallax)
@@ -373,8 +371,8 @@ fun MinecraftSunsetBackground(
             baseY = midBaseY,
             block = block,
             scrollCols = midScrollCols,
-            fillColor = Color(0xFF0B1324),
-            topRimColor = Color(0xFF1F3354),
+            fillColor = LauncherColorTokens.Background.MountainMidFill,
+            topRimColor = LauncherColorTokens.Background.MountainMidRim,
         )
         drawMountainTrees(
             heights = midHillHeights,
@@ -383,8 +381,8 @@ fun MinecraftSunsetBackground(
             block = block,
             scrollCols = midScrollCols,
             scaleFactor = 1.0f,
-            treeColor = Color(0xFF0B1324),
-            rimColor = Color(0xFF243B61),
+            treeColor = LauncherColorTokens.Background.TreeFill,
+            rimColor = LauncherColorTokens.Background.TreeRim,
         )
 
         // 8. Layer 3: Foreground Terrain Silhouette (foreground parallax)
@@ -394,8 +392,8 @@ fun MinecraftSunsetBackground(
             baseY = nearBaseY,
             block = block,
             scrollCols = timeSeconds * 0.95f,
-            fillColor = Color(0xFF050912),
-            topRimColor = Color(0xFF142238),
+            fillColor = LauncherColorTokens.Background.GroundNearFill,
+            topRimColor = LauncherColorTokens.Background.GroundNearRim,
         )
     }
 }
@@ -411,21 +409,21 @@ private fun DrawScope.drawMinecraftMoon(
     // Outer blocky moonlight aura rings
     val aura3 = block * 17f * pulse
     drawRect(
-        color = Color(0x1470A8FF),
+        color = LauncherColorTokens.Background.MoonHaloOuter,
         topLeft = Offset(centerX - aura3 / 2f, centerY - aura3 / 2f),
         size = Size(aura3, aura3),
     )
 
     val aura2 = block * 13f * pulse
     drawRect(
-        color = Color(0x248CBEFF),
+        color = LauncherColorTokens.Background.MoonHaloMid,
         topLeft = Offset(centerX - aura2 / 2f, centerY - aura2 / 2f),
         size = Size(aura2, aura2),
     )
 
     val aura1 = block * 10f
     drawRect(
-        color = Color(0x3DB8DAFF),
+        color = LauncherColorTokens.Background.MoonHaloInner,
         topLeft = Offset(centerX - aura1 / 2f, centerY - aura1 / 2f),
         size = Size(aura1, aura1),
     )
@@ -435,7 +433,7 @@ private fun DrawScope.drawMinecraftMoon(
     val left = centerX - moonSize / 2f
     val top = centerY - moonSize / 2f
     drawRect(
-        color = Color(0xFFDCEAFF),
+        color = LauncherColorTokens.Background.MoonFaceLight,
         topLeft = Offset(left, top),
         size = Size(moonSize, moonSize),
     )
@@ -443,29 +441,29 @@ private fun DrawScope.drawMinecraftMoon(
     // Inner bright lunar core (6x6 blocks)
     val moonCore = block * 6f
     drawRect(
-        color = Color(0xFFF4F9FF),
+        color = LauncherColorTokens.Background.MoonCore,
         topLeft = Offset(centerX - moonCore / 2f, centerY - moonCore / 2f),
         size = Size(moonCore, moonCore),
     )
 
     // Classic blocky Minecraft moon crater pixels
     drawRect(
-        color = Color(0xFFB3C9EA),
+        color = LauncherColorTokens.Background.MoonCrater0,
         topLeft = Offset(left + block * 1f, top + block * 1f),
         size = Size(block * 2f, block * 2f),
     )
     drawRect(
-        color = Color(0xFF9AB4DC),
+        color = LauncherColorTokens.Background.MoonCrater1,
         topLeft = Offset(left + block * 5f, top + block * 2f),
         size = Size(block * 2f, block * 1.5f),
     )
     drawRect(
-        color = Color(0xFFAEC4E6),
+        color = LauncherColorTokens.Background.MoonCrater2,
         topLeft = Offset(left + block * 2f, top + block * 5f),
         size = Size(block * 2.5f, block * 2f),
     )
     drawRect(
-        color = Color(0xFF8CA7D1),
+        color = LauncherColorTokens.Background.MoonCrater3,
         topLeft = Offset(left + block * 5f, top + block * 5f),
         size = Size(block * 1.5f, block * 1.5f),
     )
@@ -500,7 +498,7 @@ private fun DrawScope.drawMinecraftCloud(
         val rh = (bottomRow - topRow) * unit
 
         drawRect(
-            color = Color(0x9935507D),
+            color = LauncherColorTokens.Background.CloudShadow,
             topLeft = Offset(rx, ry),
             size = Size(rw, rh),
         )
@@ -522,19 +520,19 @@ private fun DrawScope.drawMinecraftCloud(
 
         // Main luminous moonlit cloud puff
         drawRect(
-            color = Color(0xD9B4CEF0),
+            color = LauncherColorTokens.Background.CloudMid,
             topLeft = Offset(rx, ry),
             size = Size(rw, rh),
         )
         // Bright lunar-white top crest (only at the top of this vertical puff column—never cutting across the middle!)
         drawRect(
-            color = Color(0xE6EEF6FF),
+            color = LauncherColorTokens.Background.CloudHighlight,
             topLeft = Offset(rx, ry),
             size = Size(rw, unit * 0.42f),
         )
         // Soft slate-blue underbelly along the flat bottom of the cloud
         drawRect(
-            color = Color(0xD97899C8),
+            color = LauncherColorTokens.Background.CloudRim,
             topLeft = Offset(rx, ry + rh - unit * 0.45f),
             size = Size(rw, unit * 0.45f),
         )
@@ -678,24 +676,13 @@ private fun CustomImageBackground(
     source: BackgroundSource.Image,
 ) {
     val context = LocalContext.current
-    var bitmap by remember(source) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var bitmap by remember(source) { mutableStateOf<Bitmap?>(null) }
     var loadFailed by remember(source) { mutableStateOf(false) }
 
     LaunchedEffect(source) {
         loadFailed = false
         bitmap = withContext(Dispatchers.IO) {
-            runCatching {
-                when {
-                    source.uri != null -> context.contentResolver.openInputStream(source.uri)?.use {
-                        BitmapFactory.decodeStream(it)
-                    }
-                    source.resId != null -> BitmapFactory.decodeResource(context.resources, source.resId)
-                    source.assetPath != null -> context.assets.open(source.assetPath).use {
-                        BitmapFactory.decodeStream(it)
-                    }
-                    else -> null
-                }
-            }.getOrNull()
+            decodeSampledBackgroundBitmap(context, source, maxDimensionPx = 2560)
         }
         if (bitmap == null) loadFailed = true
     }
@@ -714,13 +701,49 @@ private fun CustomImageBackground(
     }
 }
 
+private fun decodeSampledBackgroundBitmap(
+    context: android.content.Context,
+    source: BackgroundSource.Image,
+    maxDimensionPx: Int,
+): Bitmap? = runCatching {
+    fun openSourceStream(): InputStream? = when {
+        source.uri != null -> context.contentResolver.openInputStream(source.uri)
+        source.assetPath != null -> context.assets.open(source.assetPath)
+        else -> null
+    }
+
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    when {
+        source.resId != null -> BitmapFactory.decodeResource(context.resources, source.resId, bounds)
+        else -> openSourceStream()?.use { BitmapFactory.decodeStream(it, null, bounds) }
+    }
+
+    var sampleSize = 1
+    while (
+        (bounds.outWidth / sampleSize) > maxDimensionPx ||
+        (bounds.outHeight / sampleSize) > maxDimensionPx
+    ) {
+        sampleSize *= 2
+    }
+
+    val decodeOpts = BitmapFactory.Options().apply {
+        inSampleSize = sampleSize
+    }
+    when {
+        source.resId != null -> BitmapFactory.decodeResource(context.resources, source.resId, decodeOpts)
+        else -> openSourceStream()?.use { BitmapFactory.decodeStream(it, null, decodeOpts) }
+    }
+}.getOrNull()
+
 @Suppress("DEPRECATION")
 @Composable
 private fun CustomGifBackground(
     modifier: Modifier,
     source: BackgroundSource.Gif,
+    onMediaFrameRendered: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
+    val currentOnFrameRendered by rememberUpdatedState(onMediaFrameRendered)
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
         var drawable by remember(source) { mutableStateOf<android.graphics.drawable.Drawable?>(null) }
@@ -751,7 +774,19 @@ private fun CustomGifBackground(
             AndroidView(
                 modifier = modifier,
                 factory = { ctx ->
-                    android.widget.ImageView(ctx).apply {
+                    var frameNotifyPosted = false
+                    object : android.widget.ImageView(ctx) {
+                        override fun invalidateDrawable(dr: android.graphics.drawable.Drawable) {
+                            super.invalidateDrawable(dr)
+                            if (currentOnFrameRendered != null && !frameNotifyPosted) {
+                                frameNotifyPosted = true
+                                post {
+                                    frameNotifyPosted = false
+                                    currentOnFrameRendered?.invoke()
+                                }
+                            }
+                        }
+                    }.apply {
                         scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
                     }
                 },
@@ -814,11 +849,13 @@ private fun CustomGifBackground(
 private fun CustomVideoBackground(
     modifier: Modifier,
     source: BackgroundSource.Video,
+    onMediaFrameRendered: (() -> Unit)? = null,
 ) {
-    val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val currentOnFrameRendered by rememberUpdatedState(onMediaFrameRendered)
     var failed by remember(source) { mutableStateOf(false) }
-    val playerHolder = remember { arrayOfNulls<MediaPlayer>(1) }
+    val playerHolder = remember(source) { arrayOfNulls<MediaPlayer>(1) }
+    val surfaceHolder = remember(source) { arrayOfNulls<Surface>(1) }
 
     DisposableEffect(lifecycleOwner, source) {
         val observer = LifecycleEventObserver { _, event ->
@@ -835,6 +872,8 @@ private fun CustomVideoBackground(
             lifecycleOwner.lifecycle.removeObserver(observer)
             runCatching { playerHolder[0]?.release() }
             playerHolder[0] = null
+            runCatching { surfaceHolder[0]?.release() }
+            surfaceHolder[0] = null
         }
     }
 
@@ -843,54 +882,123 @@ private fun CustomVideoBackground(
         return
     }
 
-    AndroidView(
-        modifier = modifier,
-        factory = { ctx ->
-            SurfaceView(ctx).apply {
-                holder.addCallback(object : SurfaceHolder.Callback {
-                    override fun surfaceCreated(holder: SurfaceHolder) {
-                        runCatching {
-                            val mp = MediaPlayer()
-                            playerHolder[0] = mp
-                            mp.setSurface(holder.surface)
-                            mp.isLooping = true
-                            mp.setVolume(0f, 0f)
-                            when {
-                                source.uri != null -> mp.setDataSource(ctx, source.uri)
-                                source.rawResId != null -> {
-                                    val afd = ctx.resources.openRawResourceFd(source.rawResId)
-                                        ?: error("Cannot open raw resource ${source.rawResId}")
-                                    afd.use {
-                                        mp.setDataSource(it.fileDescriptor, it.startOffset, it.length)
+    androidx.compose.runtime.key(source) {
+        AndroidView(
+            modifier = modifier,
+            factory = { ctx ->
+                TextureView(ctx).apply {
+                    isOpaque = false
+                    var videoWidth = 0
+                    var videoHeight = 0
+
+                    surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                        override fun onSurfaceTextureAvailable(
+                            surfaceTexture: SurfaceTexture,
+                            width: Int,
+                            height: Int,
+                        ) {
+                            runCatching {
+                                val surface = Surface(surfaceTexture)
+                                surfaceHolder[0] = surface
+                                val mp = MediaPlayer()
+                                playerHolder[0] = mp
+                                mp.setSurface(surface)
+                                mp.isLooping = true
+                                mp.setVolume(0f, 0f)
+                                when {
+                                    source.uri != null -> mp.setDataSource(ctx, source.uri)
+                                    source.rawResId != null -> {
+                                        val afd = ctx.resources.openRawResourceFd(source.rawResId)
+                                            ?: error("Cannot open raw resource ${source.rawResId}")
+                                        afd.use {
+                                            mp.setDataSource(it.fileDescriptor, it.startOffset, it.length)
+                                        }
                                     }
-                                }
-                                source.assetPath != null -> {
-                                    val afd = ctx.assets.openFd(source.assetPath)
-                                    afd.use {
-                                        mp.setDataSource(it.fileDescriptor, it.startOffset, it.length)
+                                    source.assetPath != null -> {
+                                        val afd = ctx.assets.openFd(source.assetPath)
+                                        afd.use {
+                                            mp.setDataSource(it.fileDescriptor, it.startOffset, it.length)
+                                        }
                                     }
+                                    else -> error("No video source specified")
                                 }
-                                else -> error("No video source specified")
-                            }
-                            mp.setOnPreparedListener { it.start() }
-                            mp.setOnErrorListener { _, _, _ ->
+                                mp.setOnVideoSizeChangedListener { _, vw, vh ->
+                                    videoWidth = vw
+                                    videoHeight = vh
+                                    updateVideoCenterCropMatrix(this@apply, this@apply.width, this@apply.height, vw, vh)
+                                }
+                                mp.setOnPreparedListener {
+                                    if (it.videoWidth > 0 && it.videoHeight > 0) {
+                                        videoWidth = it.videoWidth
+                                        videoHeight = it.videoHeight
+                                    }
+                                    updateVideoCenterCropMatrix(
+                                        this@apply,
+                                        this@apply.width,
+                                        this@apply.height,
+                                        videoWidth,
+                                        videoHeight,
+                                    )
+                                    it.start()
+                                    currentOnFrameRendered?.invoke()
+                                }
+                                mp.setOnErrorListener { _, _, _ ->
+                                    failed = true
+                                    true
+                                }
+                                mp.prepareAsync()
+                            }.onFailure {
                                 failed = true
-                                true
                             }
-                            mp.prepareAsync()
-                        }.onFailure {
-                            failed = true
+                        }
+
+                        override fun onSurfaceTextureSizeChanged(
+                            surfaceTexture: SurfaceTexture,
+                            width: Int,
+                            height: Int,
+                        ) {
+                            updateVideoCenterCropMatrix(this@apply, width, height, videoWidth, videoHeight)
+                        }
+
+                        override fun onSurfaceTextureDestroyed(surfaceTexture: SurfaceTexture): Boolean {
+                            runCatching { playerHolder[0]?.release() }
+                            playerHolder[0] = null
+                            runCatching { surfaceHolder[0]?.release() }
+                            surfaceHolder[0] = null
+                            return true
+                        }
+
+                        override fun onSurfaceTextureUpdated(surfaceTexture: SurfaceTexture) {
+                            currentOnFrameRendered?.invoke()
                         }
                     }
+                }
+            },
+        )
+    }
+}
 
-                    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) = Unit
-
-                    override fun surfaceDestroyed(holder: SurfaceHolder) {
-                        runCatching { playerHolder[0]?.release() }
-                        playerHolder[0] = null
-                    }
-                })
-            }
-        },
-    )
+private fun updateVideoCenterCropMatrix(
+    textureView: TextureView,
+    viewWidth: Int,
+    viewHeight: Int,
+    videoWidth: Int,
+    videoHeight: Int,
+) {
+    if (viewWidth <= 0 || viewHeight <= 0 || videoWidth <= 0 || videoHeight <= 0) return
+    val viewRatio = viewWidth.toFloat() / viewHeight.toFloat()
+    val videoRatio = videoWidth.toFloat() / videoHeight.toFloat()
+    val scaleX: Float
+    val scaleY: Float
+    if (videoRatio > viewRatio) {
+        scaleX = videoRatio / viewRatio
+        scaleY = 1f
+    } else {
+        scaleX = 1f
+        scaleY = viewRatio / videoRatio
+    }
+    val matrix = Matrix().apply {
+        setScale(scaleX, scaleY, viewWidth / 2f, viewHeight / 2f)
+    }
+    textureView.setTransform(matrix)
 }

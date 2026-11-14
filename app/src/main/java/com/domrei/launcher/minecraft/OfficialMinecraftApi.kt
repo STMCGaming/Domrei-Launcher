@@ -1,6 +1,8 @@
 package com.domrei.launcher.minecraft
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -9,6 +11,7 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.util.Locale
 
 enum class MinecraftVersionFilter(val id: String) {
     RELEASE("release"),
@@ -43,6 +46,7 @@ data class FabricLoaderVersionEntry(
     val version: String,
     val maven: String,
     val stable: Boolean,
+    val releaseTime: String = "",
 )
 
 enum class DownloadCategory {
@@ -98,12 +102,28 @@ object OfficialMinecraftApi {
     const val FABRIC_GAME_VERSIONS_URL = "https://meta.fabricmc.net/v2/versions/game"
     const val FABRIC_LOADERS_URL = "https://meta.fabricmc.net/v2/versions/loader"
     const val FABRIC_MAVEN_BASE_URL = "https://maven.fabricmc.net/"
+    const val FABRIC_LOADER_INDEX_URL = "${FABRIC_MAVEN_BASE_URL}net/fabricmc/fabric-loader/"
     private const val USER_AGENT = "DomreiLauncher/1.0"
+
+    private val ISO_DATE_PREFIX_REGEX = Regex("""^(\d{4})-(\d{2})-(\d{2})(?:$|[T\s])""")
+    private val MAVEN_DATE_REGEX = Regex("""^(\d{1,2})-([A-Za-z]{3})-(\d{4})$""")
+    private val FABRIC_INDEX_ROW_REGEX = Regex(
+        """<a\s+href="[^"]*/">\s*([^/<]+)/</a>\s+(\d{1,2}-[A-Za-z]{3}-\d{4})\b""",
+        RegexOption.IGNORE_CASE,
+    )
+    private val MONTH_ABBREVIATIONS = listOf(
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    )
+    private val MONTH_INDEX_BY_ABBR = MONTH_ABBREVIATIONS
+        .mapIndexed { index, abbr -> abbr.lowercase(Locale.US) to (index + 1) }
+        .toMap()
 
     private val cacheMutex = Mutex()
     private var cachedManifest: MinecraftVersionManifest? = null
     private var cachedFabricGameVersions: Set<String>? = null
     private val cachedFabricLoaders = mutableMapOf<String, List<FabricLoaderVersionEntry>>()
+    private var cachedFabricLoaderReleaseTimes: Map<String, String>? = null
 
     /**
      * Fetches and caches Mojang's official `version_manifest_v2.json`.
@@ -187,11 +207,17 @@ object OfficialMinecraftApi {
 
                 val encodedMc = URLEncoder.encode(trimmedMc, "UTF-8").replace("+", "%20")
                 val versionSpecificUrl = "$FABRIC_LOADERS_URL/$encodedMc"
-                val loaders = runCatching {
-                    parseFabricLoadersArray(fetchRawJson(versionSpecificUrl))
-                }.getOrElse {
-                    parseFabricLoadersArray(fetchRawJson(FABRIC_LOADERS_URL))
+                val (rawJson, releaseTimes) = coroutineScope {
+                    val jsonDeferred = async {
+                        runCatching { fetchRawJson(versionSpecificUrl) }
+                            .getOrElse { fetchRawJson(FABRIC_LOADERS_URL) }
+                    }
+                    val releaseTimesDeferred = async {
+                        runCatching { fetchFabricLoaderReleaseTimes() }.getOrDefault(emptyMap())
+                    }
+                    jsonDeferred.await() to releaseTimesDeferred.await()
                 }
+                val loaders = parseFabricLoadersArray(rawJson, releaseTimes)
 
                 if (loaders.isNotEmpty()) {
                     cacheMutex.withLock { cachedFabricLoaders[trimmedMc] = loaders }
@@ -206,13 +232,21 @@ object OfficialMinecraftApi {
         return "$FABRIC_LOADERS_URL/$encodedMc/$encodedLoader/profile/json"
     }
 
-    suspend fun fetchRawJson(url: String): String = withContext(Dispatchers.IO) {
+    suspend fun fetchRawJson(url: String): String =
+        fetchRawText(url = url, accept = "application/json")
+
+    private suspend fun fetchRawText(
+        url: String,
+        accept: String,
+        connectTimeoutMs: Int = 15_000,
+        readTimeoutMs: Int = 20_000,
+    ): String = withContext(Dispatchers.IO) {
         val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 15_000
-            readTimeout = 20_000
+            connectTimeout = connectTimeoutMs
+            readTimeout = readTimeoutMs
             instanceFollowRedirects = true
             setRequestProperty("User-Agent", USER_AGENT)
-            setRequestProperty("Accept", "application/json")
+            setRequestProperty("Accept", accept)
         }
         try {
             val code = conn.responseCode
@@ -223,6 +257,70 @@ object OfficialMinecraftApi {
         } finally {
             conn.disconnect()
         }
+    }
+
+    private fun parseReleaseDateParts(rawReleaseTime: String): Triple<Int, Int, Int>? {
+        val trimmed = rawReleaseTime.trim()
+        if (trimmed.isEmpty()) return null
+
+        ISO_DATE_PREFIX_REGEX.find(trimmed)?.let { match ->
+            val year = match.groupValues[1].toIntOrNull()
+            val month = match.groupValues[2].toIntOrNull()
+            val day = match.groupValues[3].toIntOrNull()
+            if (year != null && month != null && day != null && month in 1..12 && day in 1..31) {
+                return Triple(year, month, day)
+            }
+        }
+
+        MAVEN_DATE_REGEX.matchEntire(trimmed)?.let { match ->
+            val day = match.groupValues[1].toIntOrNull()
+            val month = MONTH_INDEX_BY_ABBR[match.groupValues[2].lowercase(Locale.US)]
+            val year = match.groupValues[3].toIntOrNull()
+            if (year != null && month != null && day != null && day in 1..31) {
+                return Triple(year, month, day)
+            }
+        }
+
+        return null
+    }
+
+    /**
+     * Parses a Mojang ISO-8601 `releaseTime` (e.g. `2026-11-10T14:20:05+00:00`), normalized
+     * `YYYY-MM-DD`, or Fabric Maven `DD-MMM-YYYY` date string into `MMM d, yyyy`.
+     */
+    fun formatReleaseDate(rawReleaseTime: String): String {
+        val (year, month, day) = parseReleaseDateParts(rawReleaseTime) ?: return ""
+        return "${MONTH_ABBREVIATIONS[month - 1]} $day, $year"
+    }
+
+    internal fun parseFabricLoaderReleaseDates(html: String): Map<String, String> {
+        val dates = LinkedHashMap<String, String>()
+        for (match in FABRIC_INDEX_ROW_REGEX.findAll(html)) {
+            val version = match.groupValues[1].trim()
+            val parts = parseReleaseDateParts(match.groupValues[2])
+            if (version.isNotEmpty() && parts != null) {
+                val (year, month, day) = parts
+                dates[version] = String.format(Locale.US, "%04d-%02d-%02d", year, month, day)
+            }
+        }
+        return dates
+    }
+
+    private suspend fun fetchFabricLoaderReleaseTimes(forceRefresh: Boolean = false): Map<String, String> {
+        if (!forceRefresh) {
+            cacheMutex.withLock { cachedFabricLoaderReleaseTimes }?.let { return it }
+        }
+        val html = fetchRawText(
+            url = FABRIC_LOADER_INDEX_URL,
+            accept = "text/html,application/xhtml+xml,*/*",
+            connectTimeoutMs = 8_000,
+            readTimeoutMs = 10_000,
+        )
+        val parsed = parseFabricLoaderReleaseDates(html)
+        if (parsed.isNotEmpty()) {
+            cacheMutex.withLock { cachedFabricLoaderReleaseTimes = parsed }
+        }
+        return parsed
     }
 
     fun parseVersionPackageJson(mcVersion: String, jsonStr: String): ParsedVersionPackage {
@@ -411,7 +509,10 @@ object OfficialMinecraftApi {
         return "$groupPath/$artifact/$versionPart/$fileName"
     }
 
-    private fun parseFabricLoadersArray(jsonStr: String): List<FabricLoaderVersionEntry> {
+    private fun parseFabricLoadersArray(
+        jsonStr: String,
+        releaseTimes: Map<String, String> = emptyMap(),
+    ): List<FabricLoaderVersionEntry> {
         val array = JSONArray(jsonStr)
         val result = ArrayList<FabricLoaderVersionEntry>(array.length())
         for (i in 0 until array.length()) {
@@ -424,6 +525,7 @@ object OfficialMinecraftApi {
                         version = version,
                         maven = loaderObj.optString("maven", ""),
                         stable = loaderObj.optBoolean("stable", false),
+                        releaseTime = releaseTimes[version].orEmpty(),
                     ),
                 )
             }

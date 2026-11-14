@@ -15,10 +15,13 @@ import com.domrei.gameengine.runtime.InstalledJavaRuntime
 import com.domrei.gameengine.runtime.JavaRuntimeVersion
 import com.domrei.gameengine.runtime.JdkManager
 import com.domrei.gameengine.runtime.RuntimeAbi
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -194,6 +197,7 @@ class DomreiGameEngine(
             onProgress("Ready to launch ${request.instanceName}", 1.0f)
             spec
         }.onFailure { error ->
+            if (error is CancellationException) throw error
             appendLog("[DomreiEngine] Preparation failed: ${error.message}")
             _status.value = _status.value.copy(
                 state = GameEngineState.FAILED,
@@ -422,6 +426,7 @@ class DomreiGameEngine(
 
         return withContext(Dispatchers.IO) {
             runCatching {
+                currentCoroutineContext().ensureActive()
                 stopActiveGame()
 
                 DomreiJliRunner.enforceReadOnlyExecutablePermissions(spec.runtime.execHomeDir)
@@ -536,6 +541,7 @@ class DomreiGameEngine(
 
                 spec
             }.onFailure { error ->
+                if (error is CancellationException) throw error
                 appendLog("[DomreiEngine] Launch error: ${error.message}")
                 _status.value = _status.value.copy(
                     state = GameEngineState.FAILED,
@@ -543,6 +549,18 @@ class DomreiGameEngine(
                     errorMessage = error.message
                 )
             }
+        }
+    }
+
+    /** Resets preparation state to IDLE when a user cancels an in-flight runtime/renderer prepare job. */
+    fun cancelPreparation() {
+        val currentState = _status.value.state
+        if (currentState == GameEngineState.PREPARING_RUNTIME ||
+            currentState == GameEngineState.PREPARING_RENDERER ||
+            currentState == GameEngineState.BUILDING_SPEC
+        ) {
+            appendLog("[DomreiEngine] Launch preparation cancelled by user")
+            _status.value = GameEngineStatus()
         }
     }
 
@@ -737,6 +755,11 @@ class DomreiGameEngine(
             ZipFile(bridgeJar).use { zip ->
                 val names = listOf(
                     "org/lwjgl/system/Library.class",
+                    "org/lwjgl/opengl/PojavRendererInit.class",
+                    "org/lwjgl/opengl/GL31.class",
+                    "org/lwjgl/opengl/GL31C.class",
+                    "org/lwjgl/opengl/GL32.class",
+                    "org/lwjgl/opengl/GL32C.class",
                     "oshi/hardware/platform/linux/LinuxCentralProcessor.class",
                     "com/mojang/text2speech/NarratorLinux.class",
                     "com/mojang/authlib/yggdrasil/YggdrasilAuthenticationService.class",
@@ -757,6 +780,8 @@ class DomreiGameEngine(
             val name = jarFile.name
             val patchesForJar: Map<String, ByteArray> = when {
                 name == "lwjgl.jar" -> overrideEntries.filterKeys { it.startsWith("org/lwjgl/system/") }
+                name.startsWith("lwjgl-3.") || name.startsWith("lwjgl-opengl") ->
+                    overrideEntries.filterKeys { it.startsWith("org/lwjgl/opengl/") }
                 name.startsWith("oshi-core") -> overrideEntries.filterKeys { it.startsWith("oshi/") }
                 name.startsWith("text2speech") -> overrideEntries.filterKeys { it.startsWith("com/mojang/text2speech/") }
                 name.startsWith("authlib") -> overrideEntries.filterKeys { it.startsWith("com/mojang/authlib/") }
@@ -818,6 +843,6 @@ class DomreiGameEngine(
 
     companion object {
         private const val MAX_LOG_LINES = 250
-        private const val PATCH_MARKER_SUFFIX = "domrei_patch_v1"
+        private const val PATCH_MARKER_SUFFIX = "domrei_patch_v3"
     }
 }

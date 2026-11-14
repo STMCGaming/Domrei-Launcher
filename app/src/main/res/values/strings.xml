@@ -30,13 +30,9 @@
     <string name="select_loader_version">Select Fabric Loader Version</string>
     <string name="enter_instance_name">Enter Instance Name</string>
     <string name="instance_fabric_short_format">Fabric %1$s</string>
-    <string name="loader_stable_badge">Stable</string>
     <string name="version_filter_release">Release</string>
     <string name="version_filter_snapshot">Snapshot</string>
     <string name="version_filter_beta_alpha">Beta / Alpha</string>
-    <string name="version_badge_latest">Latest</string>
-    <string name="version_badge_beta">Beta</string>
-    <string name="version_badge_alpha">Alpha</string>
     <string name="loading_versions">Loading official versions…</string>
     <string name="loading_fabric_loaders">Loading Fabric loaders…</string>
     <string name="error_loading_versions">Failed to load versions from official API</string>
@@ -61,6 +57,10 @@
     <!-- Account Panel & Dialogs -->
     <string name="add_account">Add Account</string>
     <string name="rename_account">Rename Account</string>
+    <string name="dialog_confirm_remove_account_title">Remove Account</string>
+    <string name="dialog_confirm_remove_account_message">Remove account \"%1$s\"?</string>
+    <string name="dialog_confirm_remove_instance_title">Remove Instance</string>
+    <string name="dialog_confirm_remove_instance_message">Delete instance \"%1$s\" and its files?</string>
     <string name="action_rename">Rename</string>
     <string name="action_remove">Remove</string>
     <string name="action_more_options">More options</string>
@@ -78,6 +78,18 @@
     <string name="account_type_offline">Offline Account</string>
 
     <!-- Game Engine & Settings -->
+    <string name="settings_category_display_renderer">Display and Renderer</string>
+    <string name="settings_category_appearance">Appearance</string>
+    <string name="settings_bg_title">Custom Background</string>
+    <string name="settings_bg_pick_media">Image / Video</string>
+    <string name="settings_bg_importing">Importing media…</string>
+    <string name="settings_bg_import_failed">Could not load selected file</string>
+    <string name="settings_accent_title">Accent Color</string>
+    <string name="action_reset">Reset</string>
+    <string name="dialog_color_picker_title">Accent Color Picker</string>
+    <string name="dialog_color_picker_hue">Hue</string>
+    <string name="dialog_color_picker_hex_label">Hex Code</string>
+    <string name="action_apply">Apply</string>
     <string name="settings_renderer_title">Renderer Engine</string>
     <string name="settings_openjdk_title">OpenJDK Runtime (ZalithLauncher2)</string>
     <string name="settings_engine_console_title">Domrei Game Engine Console</string>

@@ -2,7 +2,9 @@ package com.domrei.gameengine.runtime
 
 import android.content.Context
 import android.os.Build
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
@@ -367,7 +369,7 @@ class JdkManager(
                 )
             )
             installed
-        }
+        }.onFailure { if (it is CancellationException) throw it }
     }
 
     /**
@@ -498,11 +500,12 @@ class JdkManager(
         }
     }
 
-    private fun downloadFileWithProgress(
+    private suspend fun downloadFileWithProgress(
         url: String,
         targetFile: File,
         onProgress: (Float) -> Unit
     ) {
+        currentCoroutineContext().ensureActive()
         targetFile.parentFile?.mkdirs()
         val tempFile = File(targetFile.parentFile, "${targetFile.name}.part")
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
@@ -522,6 +525,7 @@ class JdkManager(
                 FileOutputStream(tempFile).use { output ->
                     val buffer = ByteArray(32 * 1024)
                     while (true) {
+                        currentCoroutineContext().ensureActive()
                         val read = input.read(buffer)
                         if (read < 0) break
                         output.write(buffer, 0, read)
@@ -539,6 +543,9 @@ class JdkManager(
                 tempFile.copyTo(targetFile, overwrite = true)
                 tempFile.delete()
             }
+        } catch (t: Throwable) {
+            tempFile.delete()
+            throw t
         } finally {
             connection.disconnect()
         }

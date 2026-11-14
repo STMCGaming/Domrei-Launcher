@@ -4,13 +4,16 @@ import android.graphics.Bitmap
 import android.graphics.Canvas as AndroidCanvas
 import android.graphics.Paint as AndroidPaint
 import android.graphics.Rect as AndroidRect
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
@@ -23,6 +26,7 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.updateTransition
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -34,16 +38,21 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -62,6 +71,7 @@ import androidx.annotation.StringRes
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -72,6 +82,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -79,6 +91,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -86,23 +99,32 @@ import androidx.compose.ui.composed
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -113,18 +135,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import kotlin.math.roundToInt
 import com.domrei.gameengine.DomreiGameEngine
 import com.domrei.gameengine.GameEngineState
-import com.domrei.gameengine.GameEngineStatus
 import com.domrei.gameengine.GameLaunchRequest
-import com.domrei.gameengine.renderer.RendererType
-import com.domrei.gameengine.runtime.InstalledJavaRuntime
-import com.domrei.gameengine.runtime.JavaRuntimeVersion
 import com.domrei.launcher.minecraft.DownloadFileItem
 import com.domrei.launcher.minecraft.DownloadStageStatus
 import com.domrei.launcher.minecraft.FabricLoaderVersionEntry
@@ -134,17 +154,26 @@ import com.domrei.launcher.minecraft.MinecraftVersionFilter
 import com.domrei.launcher.minecraft.MinecraftVersionManifest
 import com.domrei.launcher.minecraft.OfficialMinecraftApi
 import com.domrei.launcher.ui.theme.DomreiLauncherTheme
+import com.domrei.launcher.ui.theme.LauncherColorTokens
+import com.domrei.launcher.ui.theme.LauncherTheme
+import com.domrei.launcher.ui.theme.colorToHsv
+import com.domrei.launcher.ui.theme.formatColorHex
+import com.domrei.launcher.ui.theme.hsvToColor
+import com.domrei.launcher.ui.theme.parseHexColorOrNull
 import com.domrei.skinview.DefaultSkin
 import com.domrei.skinview.SkinAnimations
 import com.domrei.skinview.SkinUtils
 import com.domrei.skinview.SkinViewer
 import com.domrei.skinview.SkinViewerConfig
 import java.util.Locale
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private const val SKIN_ASSET = "skin.png"
 private const val CAPE_ASSET = "cape.png"
+private val PROGRESS_BAR_EXPANDED_HEIGHT = 264.dp
 
 class LauncherActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -224,10 +253,39 @@ enum class InstanceLoaderType(
     @StringRes val titleRes: Int,
     @DrawableRes val iconRes: Int,
     val enabled: Boolean,
+    val keepOriginalIconColor: Boolean = false,
 ) {
     VANILLA(R.string.instance_type_vanilla, R.drawable.ic_instances, true),
-    FABRIC(R.string.instance_type_fabric, R.drawable.ic_fabric, true),
+    FABRIC(R.string.instance_type_fabric, R.drawable.ic_fabric, true, keepOriginalIconColor = true),
     OTHER(R.string.instance_type_other_not_yet, R.drawable.ic_settings, false),
+}
+
+/**
+ * Renders a loader/instance icon while keeping multi-color official logos (such as Fabric)
+ * completely untinted so their original colors are never modified.
+ */
+@Composable
+private fun InstanceLoaderIcon(
+    loaderType: InstanceLoaderType,
+    contentDescription: String?,
+    defaultTint: Color,
+    modifier: Modifier = Modifier,
+) {
+    val painter = painterResource(id = loaderType.iconRes)
+    if (loaderType.keepOriginalIconColor) {
+        Image(
+            painter = painter,
+            contentDescription = contentDescription,
+            modifier = modifier,
+        )
+    } else {
+        Icon(
+            painter = painter,
+            contentDescription = contentDescription,
+            tint = defaultTint,
+            modifier = modifier,
+        )
+    }
 }
 
 sealed interface AddInstanceStep {
@@ -278,17 +336,24 @@ data class LauncherAccount(
 sealed interface LauncherDialog {
     data object AddAccount : LauncherDialog
     data class RenameAccount(val account: LauncherAccount) : LauncherDialog
+    data class ConfirmRemoveAccount(val account: LauncherAccount) : LauncherDialog
+    data class ConfirmRemoveInstance(val instance: LauncherInstance) : LauncherDialog
     data object AddInstance : LauncherDialog
+    data class PickAccentColor(val initialColor: Color) : LauncherDialog
 }
 
 /**
- * Reusable interactive press-bounce modifier that scales down smoothly on press and springs back on release.
+ * Reusable interactive press-bounce modifier that scales down smoothly on press,
+ * springs back on release, and plays the launcher's soft bobble click sound when tapped.
  */
 private fun Modifier.smoothPressClickable(
     enabled: Boolean = true,
     pressScale: Float = 0.95f,
+    playSound: Boolean = true,
     onClick: () -> Unit,
 ): Modifier = composed {
+    val soundPlayer = LocalLauncherSoundPlayer.current
+    val currentOnClick by rememberUpdatedState(onClick)
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
@@ -308,19 +373,39 @@ private fun Modifier.smoothPressClickable(
             enabled = enabled,
             interactionSource = interactionSource,
             indication = null,
-            onClick = onClick,
+            onClick = {
+                if (playSound) {
+                    soundPlayer?.playBobble()
+                }
+                currentOnClick()
+            },
         )
 }
 
 @Composable
 fun LauncherScreen(
     modifier: Modifier = Modifier,
-    backgroundConfig: BackgroundConfig = BackgroundConfig(
-        source = BackgroundSource.MinecraftSunset(),
-    ),
+    backgroundConfig: BackgroundConfig? = null,
 ) {
     val context = LocalContext.current
-    val currentBackground by remember(backgroundConfig) { mutableStateOf(backgroundConfig) }
+    val isInPreview = LocalInspectionMode.current
+    val appearancePrefs = remember(context) { AppearancePreferences(context) }
+    var currentBackground by remember(backgroundConfig) {
+        mutableStateOf(
+            backgroundConfig ?: if (isInPreview) {
+                BackgroundConfig(source = BackgroundSource.MinecraftSunset())
+            } else {
+                appearancePrefs.loadBackgroundConfig()
+            },
+        )
+    }
+    var accentColor by remember {
+        mutableStateOf(
+            if (isInPreview) LauncherColorTokens.DefaultAccent else appearancePrefs.loadAccentColor(),
+        )
+    }
+    var isImportingBackground by remember { mutableStateOf(false) }
+    var backgroundImportError by remember { mutableStateOf<String?>(null) }
 
     // null = Default Home Screen.
     // Tapping a button selects it; tapping the currently active button returns to the Home Screen (null).
@@ -332,14 +417,7 @@ fun LauncherScreen(
     val instanceManager = remember(context) { MinecraftInstanceManager(context) }
     val gameEngine = remember(context) { DomreiGameEngine(context) }
     val engineStatus by gameEngine.status.collectAsState()
-    val engineLogs by gameEngine.logs.collectAsState()
-    var selectedRenderer by remember { mutableStateOf(gameEngine.rendererManager.getSelectedRenderer()) }
-    var installedRuntimes by remember { mutableStateOf(gameEngine.jdkManager.listInstalledRuntimes()) }
-    var rendererInstallStates by remember {
-        mutableStateOf(
-            RendererType.entries.associateWith { gameEngine.rendererManager.isRendererInstalled(it) }
-        )
-    }
+    val selectedRenderer = remember { gameEngine.rendererManager.getSelectedRenderer() }
     var instances by remember { mutableStateOf(instanceManager.loadInstances()) }
     var selectedInstanceId by remember { mutableStateOf(instances.firstOrNull()?.id.orEmpty()) }
 
@@ -350,6 +428,7 @@ fun LauncherScreen(
     // Dynamic Island-style Game Engine ProgressBar state (PREPARING_RUNTIME / PREPARING_RENDERER / BUILDING_SPEC)
     var activeEngineTask by remember { mutableStateOf<InstanceInstallTask?>(null) }
     var engineSnapshot by remember { mutableStateOf<InstallProgressSnapshot?>(null) }
+    var activeEngineLaunchJob by remember { mutableStateOf<Job?>(null) }
 
     val isEnginePreparing = engineStatus.state == GameEngineState.PREPARING_RUNTIME ||
         engineStatus.state == GameEngineState.PREPARING_RENDERER ||
@@ -433,6 +512,7 @@ fun LauncherScreen(
             selectedInstanceId = installed.id
             delay(1100L)
         }.onFailure { err ->
+            if (err is CancellationException) throw err
             Log.e("LauncherScreen", "Instance install failed for ${task.mcVersion}", err)
             delay(2600L)
         }
@@ -476,10 +556,104 @@ fun LauncherScreen(
     val animSpeed = (currentBackground.source as? BackgroundSource.MinecraftSunset)?.animationSpeed ?: 1f
     val sharedTimeSeconds = rememberBackgroundTimeSeconds(animSpeed)
 
+    val importSelectedMedia: (Uri?) -> Unit = { pickedUri ->
+        if (pickedUri != null) {
+            coroutineScope.launch {
+                isImportingBackground = true
+                backgroundImportError = null
+                appearancePrefs.importCustomBackground(pickedUri)
+                    .onSuccess { newSource ->
+                        val updated = currentBackground.copy(source = newSource)
+                        currentBackground = updated
+                        appearancePrefs.saveBackgroundConfig(updated)
+                    }
+                    .onFailure { err ->
+                        backgroundImportError = err.message ?: context.getString(R.string.settings_bg_import_failed)
+                    }
+                isImportingBackground = false
+            }
+        }
+    }
+
+    val mediaPickerLauncher = if (!isInPreview) {
+        rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.OpenDocument(),
+        ) { uri -> importSelectedMedia(uri) }
+    } else {
+        null
+    }
+    val launchMediaPicker: () -> Unit = {
+        mediaPickerLauncher?.launch(arrayOf("image/*", "video/*"))
+    }
+
+    val soundPlayer = remember(context, isInPreview) {
+        if (isInPreview) null else LauncherSoundPlayer(context)
+    }
+    DisposableEffect(soundPlayer) {
+        onDispose {
+            soundPlayer?.release()
+        }
+    }
+
+    DomreiLauncherTheme(accentColor = accentColor) {
+    CompositionLocalProvider(LocalLauncherSoundPlayer provides soundPlayer) {
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val screenWidth = maxWidth
         val screenHeight = maxHeight
         val sceneGraphicsLayer = rememberGraphicsLayer()
+        val progressBackdropLayer = rememberGraphicsLayer()
+        val backgroundGraphicsLayer = rememberGraphicsLayer()
+        val blurredBackgroundLayer = rememberGraphicsLayer()
+        var backgroundRootOffset by remember { mutableStateOf(Offset.Zero) }
+        var backgroundFrameTick by remember { mutableIntStateOf(0) }
+        val progressTransition = updateTransition(
+            targetState = effectiveProgressTask != null,
+            label = "progressBarVisibility",
+        )
+        val shouldCaptureProgressBlur =
+            progressTransition.currentState || progressTransition.targetState
+
+        val density = LocalDensity.current
+        val screenWidthPx = with(density) { screenWidth.toPx() }
+        val screenHeightPx = with(density) { screenHeight.toPx() }
+        val bgWidthInt = screenWidthPx.roundToInt().coerceAtLeast(1)
+        val bgHeightInt = screenHeightPx.roundToInt().coerceAtLeast(1)
+        val topInsetPx = with(density) { 6.dp.toPx() }
+        val panelBlurRadiusPx = with(density) { 20.dp.toPx() }.coerceAtLeast(1f)
+        val progressBlurRadiusPx = with(density) { 10.dp.toPx() }.coerceAtLeast(1f)
+        val blurPadPx = with(density) { 48.dp.toPx() }
+        val maxIslandWidthPx = with(density) { 410.dp.toPx() }
+        val maxIslandHeightPx = with(density) { PROGRESS_BAR_EXPANDED_HEIGHT.toPx() }
+        val regionLeftPx = ((screenWidthPx - maxIslandWidthPx) * 0.5f - blurPadPx)
+            .coerceAtLeast(0f)
+        val regionTopPx = (topInsetPx - blurPadPx).coerceAtLeast(0f)
+        val regionRightPx = ((screenWidthPx + maxIslandWidthPx) * 0.5f + blurPadPx)
+            .coerceAtMost(screenWidthPx)
+        val regionBottomPx = (topInsetPx + maxIslandHeightPx + blurPadPx)
+            .coerceAtMost(screenHeightPx)
+        val regionWidthInt = (regionRightPx - regionLeftPx).roundToInt().coerceAtLeast(1)
+        val regionHeightInt = (regionBottomPx - regionTopPx).roundToInt().coerceAtLeast(1)
+        val panelBlurEffect = remember(panelBlurRadiusPx) {
+            BlurEffect(
+                renderEffect = null,
+                radiusX = panelBlurRadiusPx,
+                radiusY = panelBlurRadiusPx,
+                edgeTreatment = TileMode.Clamp,
+            )
+        }
+        val sharedPanelBackdropLayer = when {
+            isInPreview -> null
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> blurredBackgroundLayer
+            else -> backgroundGraphicsLayer
+        }
+        val progressBlurEffect = remember(progressBlurRadiusPx) {
+            BlurEffect(
+                renderEffect = null,
+                radiusX = progressBlurRadiusPx,
+                radiusY = progressBlurRadiusPx,
+                edgeTreatment = TileMode.Clamp,
+            )
+        }
 
         // Main screen content container: smoothly blurred across the full screen when any dialog is open
         Box(
@@ -502,18 +676,75 @@ fun LauncherScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .drawWithContent {
-                        sceneGraphicsLayer.record {
+                        if (shouldCaptureProgressBlur) {
+                            sceneGraphicsLayer.record {
+                                this@drawWithContent.drawContent()
+                            }
+                            drawLayer(sceneGraphicsLayer)
+
+                            progressBackdropLayer.clip = true
+                            if (progressBackdropLayer.renderEffect != progressBlurEffect) {
+                                progressBackdropLayer.renderEffect = progressBlurEffect
+                            }
+                            progressBackdropLayer.record(
+                                size = IntSize(regionWidthInt, regionHeightInt),
+                            ) {
+                                translate(left = -regionLeftPx, top = -regionTopPx) {
+                                    drawLayer(sceneGraphicsLayer)
+                                }
+                            }
+                        } else {
                             this@drawWithContent.drawContent()
                         }
-                        drawLayer(sceneGraphicsLayer)
                     },
             ) {
-                // 1. Full-screen animated background
-                LauncherBackground(
-                    modifier = Modifier.fillMaxSize(),
-                    config = currentBackground,
-                    sharedTimeSeconds = sharedTimeSeconds,
-                )
+                // 1. Single full-screen background recorded once and blurred once into blurredBackgroundLayer
+                // so Tab Panel, Change button, Version panel, and Play button share identical live blur (including Video/GIF).
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .onGloballyPositioned { coords ->
+                            if (coords.isAttached) {
+                                val pos = coords.positionInRoot()
+                                if (pos != backgroundRootOffset) {
+                                    backgroundRootOffset = pos
+                                }
+                            }
+                        }
+                        .drawWithContent {
+                            @Suppress("UNUSED_EXPRESSION")
+                            backgroundFrameTick
+                            if (!isInPreview) {
+                                backgroundGraphicsLayer.record {
+                                    this@drawWithContent.drawContent()
+                                }
+                                drawLayer(backgroundGraphicsLayer)
+
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                    blurredBackgroundLayer.clip = true
+                                    if (blurredBackgroundLayer.renderEffect != panelBlurEffect) {
+                                        blurredBackgroundLayer.renderEffect = panelBlurEffect
+                                    }
+                                    blurredBackgroundLayer.record(
+                                        size = IntSize(bgWidthInt, bgHeightInt),
+                                    ) {
+                                        drawLayer(backgroundGraphicsLayer)
+                                    }
+                                }
+                            } else {
+                                this@drawWithContent.drawContent()
+                            }
+                        },
+                ) {
+                    LauncherBackground(
+                        modifier = Modifier.fillMaxSize(),
+                        config = currentBackground,
+                        sharedTimeSeconds = sharedTimeSeconds,
+                        onMediaFrameRendered = {
+                            backgroundFrameTick = (backgroundFrameTick + 1) and 0x7FFF_FFFF
+                        },
+                    )
+                }
 
                 // Tap-outside scrim to close the Change panel when open
                 if (isChangePanelOpen && currentDestination == null) {
@@ -547,12 +778,7 @@ fun LauncherScreen(
                     activeDialog = LauncherDialog.AddInstance
                 },
                 onRemoveInstance = { instance ->
-                    instanceManager.removeInstance(instance.id)
-                    val remaining = instanceManager.loadInstances()
-                    instances = remaining
-                    if (selectedInstanceId == instance.id) {
-                        selectedInstanceId = remaining.firstOrNull()?.id.orEmpty()
-                    }
+                    activeDialog = LauncherDialog.ConfirmRemoveInstance(instance)
                 },
                 accounts = accounts,
                 selectedAccountId = selectedAccountId,
@@ -566,120 +792,33 @@ fun LauncherScreen(
                     activeDialog = LauncherDialog.RenameAccount(account)
                 },
                 onRemoveAccount = { account ->
-                    val remaining = accounts.filterNot { it.id == account.id }
-                    accounts = remaining
-                    if (selectedAccountId == account.id) {
-                        selectedAccountId = remaining.firstOrNull()?.id.orEmpty()
-                    }
+                    activeDialog = LauncherDialog.ConfirmRemoveAccount(account)
                 },
-                selectedRenderer = selectedRenderer,
-                rendererInstallStates = rendererInstallStates,
-                installedRuntimes = installedRuntimes,
-                engineStatus = engineStatus,
-                engineLogs = engineLogs,
-                onRendererSelect = { renderer ->
-                    selectedRenderer = renderer
-                    gameEngine.rendererManager.setSelectedRenderer(renderer)
+                accentColor = accentColor,
+                isImportingBackground = isImportingBackground,
+                backgroundImportError = backgroundImportError,
+                onPickBackgroundMedia = launchMediaPicker,
+                onResetBackground = {
+                    backgroundImportError = null
+                    appearancePrefs.clearCustomBackgroundFiles()
+                    val resetConfig = BackgroundConfig(source = BackgroundSource.MinecraftSunset())
+                    currentBackground = resetConfig
+                    appearancePrefs.saveBackgroundConfig(resetConfig)
                 },
-                onDownloadRenderer = { renderer ->
-                    coroutineScope.launch {
-                        activeEngineTask = InstanceInstallTask(
-                            id = "renderer_${renderer.id}_${System.currentTimeMillis()}",
-                            instanceName = renderer.displayName,
-                            loaderType = InstanceLoaderType.VANILLA,
-                            mcVersion = renderer.glVersionLabel,
-                            loaderVersion = null,
-                            isInstanceInstall = false,
-                            customStatusTitle = "PREPARING_RENDERER: ${renderer.displayName}",
-                        )
-                        gameEngine.rendererManager.prepareRenderer(
-                            type = renderer,
-                            forceReinstall = true,
-                        ) { stage, fraction ->
-                            activeEngineTask = activeEngineTask?.copy(
-                                customStatusTitle = "PREPARING_RENDERER: $stage",
-                            )
-                            engineSnapshot = InstallProgressSnapshot(
-                                progress = fraction.coerceIn(0f, 1f),
-                                currentFileName = stage,
-                                downloadedMb = fraction * 8.8f,
-                                totalMb = 8.8f,
-                                speedMbPerSec = 4.2f,
-                                files = listOf(
-                                    DownloadFileItem(
-                                        fileName = renderer.nativeLibFileName,
-                                        sizeMb = 8.8f,
-                                        progress = fraction,
-                                        status = if (fraction >= 1f) DownloadStageStatus.DONE else DownloadStageStatus.DOWNLOADING,
-                                    ),
-                                ),
-                                isComplete = fraction >= 1f,
-                            )
-                        }
-                        rendererInstallStates = RendererType.entries.associateWith {
-                            gameEngine.rendererManager.isRendererInstalled(it)
-                        }
-                        delay(800L)
-                        activeEngineTask = null
-                        engineSnapshot = null
-                        isProgressBarExpanded = false
-                    }
+                onAccentColorChange = { newAccent ->
+                    accentColor = newAccent
+                    appearancePrefs.saveAccentColor(newAccent)
                 },
-                onDownloadRuntime = { runtimeVersion ->
-                    coroutineScope.launch {
-                        activeEngineTask = InstanceInstallTask(
-                            id = "jre_${runtimeVersion.dirName}_${System.currentTimeMillis()}",
-                            instanceName = runtimeVersion.displayName,
-                            loaderType = InstanceLoaderType.VANILLA,
-                            mcVersion = runtimeVersion.supportedMinecraftRange,
-                            loaderVersion = null,
-                            isInstanceInstall = false,
-                            customStatusTitle = "PREPARING_RUNTIME: ${runtimeVersion.displayName}",
-                        )
-                        gameEngine.jdkManager.ensureRuntimeInstalled(
-                            version = runtimeVersion,
-                            forceReinstall = true,
-                        ) { rtProgress ->
-                            activeEngineTask = activeEngineTask?.copy(
-                                customStatusTitle = "PREPARING_RUNTIME: ${rtProgress.stage}",
-                            )
-                            engineSnapshot = InstallProgressSnapshot(
-                                progress = rtProgress.progressFraction.coerceIn(0f, 1f),
-                                currentFileName = rtProgress.stage,
-                                downloadedMb = rtProgress.progressFraction * 24f,
-                                totalMb = 24f,
-                                speedMbPerSec = 5.5f,
-                                files = listOf(
-                                    DownloadFileItem(
-                                        fileName = "${runtimeVersion.dirName}/universal.tar.xz",
-                                        sizeMb = 18f,
-                                        progress = (rtProgress.progressFraction * 1.4f).coerceIn(0f, 1f),
-                                        status = if (rtProgress.progressFraction >= 0.7f) DownloadStageStatus.DONE else DownloadStageStatus.DOWNLOADING,
-                                    ),
-                                    DownloadFileItem(
-                                        fileName = "${runtimeVersion.dirName}/bin-arch.tar.xz",
-                                        sizeMb = 6f,
-                                        progress = ((rtProgress.progressFraction - 0.45f) * 1.8f).coerceIn(0f, 1f),
-                                        status = if (rtProgress.progressFraction >= 1f) DownloadStageStatus.DONE else DownloadStageStatus.DOWNLOADING,
-                                    ),
-                                ),
-                                isComplete = rtProgress.progressFraction >= 1f,
-                            )
-                        }
-                        installedRuntimes = gameEngine.jdkManager.listInstalledRuntimes()
-                        delay(900L)
-                        activeEngineTask = null
-                        engineSnapshot = null
-                        isProgressBarExpanded = false
-                    }
-                },
-                onStopGame = {
-                    gameEngine.stopActiveGame()
+                onOpenAccentColorPicker = {
+                    activeDialog = LauncherDialog.PickAccentColor(initialColor = accentColor)
                 },
                 screenWidth = screenWidth,
                 screenHeight = screenHeight,
                 backgroundConfig = currentBackground,
                 sharedTimeSeconds = sharedTimeSeconds,
+                blurredBackgroundLayer = sharedPanelBackdropLayer,
+                backgroundRootOffset = backgroundRootOffset,
+                backgroundFrameTick = { backgroundFrameTick },
                 modifier = Modifier.align(Alignment.CenterStart),
             )
 
@@ -728,79 +867,84 @@ fun LauncherScreen(
                         if (targetInstance == null) {
                             activeDialog = LauncherDialog.AddInstance
                         } else {
-                            coroutineScope.launch {
-                                activeEngineTask = InstanceInstallTask(
-                                    id = "launch_${targetInstance.id}_${System.currentTimeMillis()}",
-                                    instanceName = targetInstance.name,
-                                    loaderType = targetInstance.loaderType,
-                                    mcVersion = targetInstance.mcVersion,
-                                    loaderVersion = targetInstance.loaderVersion,
-                                    isInstanceInstall = false,
-                                    customStatusTitle = "PREPARING_RUNTIME: ${targetInstance.name}",
-                                )
-                                val request = GameLaunchRequest(
-                                    instanceName = targetInstance.name,
-                                    minecraftVersion = targetInstance.mcVersion,
-                                    loaderType = if (targetInstance.loaderType == InstanceLoaderType.FABRIC) "Fabric" else "Vanilla",
-                                    loaderVersion = targetInstance.loaderVersion,
-                                    minecraftRootDir = instanceManager.rootDir,
-                                    instanceGameDir = instanceManager.gameDirFor(targetInstance.id),
-                                    username = activeUsername,
-                                    preferredRenderer = selectedRenderer,
-                                )
-                                gameEngine.launchGame(
-                                    request = request,
-                                    scope = coroutineScope,
-                                ) { stage, fraction ->
-                                    val stateLabel = gameEngine.status.value.state.name
-                                    activeEngineTask = activeEngineTask?.copy(
-                                        customStatusTitle = "$stateLabel: $stage",
+                            activeEngineLaunchJob?.cancel()
+                            activeEngineLaunchJob = coroutineScope.launch {
+                                try {
+                                    activeEngineTask = InstanceInstallTask(
+                                        id = "launch_${targetInstance.id}_${System.currentTimeMillis()}",
+                                        instanceName = targetInstance.name,
+                                        loaderType = targetInstance.loaderType,
+                                        mcVersion = targetInstance.mcVersion,
+                                        loaderVersion = targetInstance.loaderVersion,
+                                        isInstanceInstall = false,
+                                        customStatusTitle = "PREPARING_RUNTIME: ${targetInstance.name}",
                                     )
-                                    engineSnapshot = InstallProgressSnapshot(
-                                        progress = fraction.coerceIn(0f, 1f),
-                                        currentFileName = "$stateLabel: $stage",
-                                        downloadedMb = fraction * 25f,
-                                        totalMb = 25f,
-                                        speedMbPerSec = 5.0f,
-                                        files = listOf(
-                                            DownloadFileItem(
-                                                fileName = "PREPARING_RUNTIME (${gameEngine.status.value.activeRuntime?.displayName ?: "OpenJDK"})",
-                                                sizeMb = 19f,
-                                                progress = (fraction / 0.60f).coerceIn(0f, 1f),
-                                                status = if (fraction >= 0.60f) DownloadStageStatus.DONE else DownloadStageStatus.DOWNLOADING,
-                                            ),
-                                            DownloadFileItem(
-                                                fileName = "PREPARING_RENDERER (${selectedRenderer.displayName})",
-                                                sizeMb = 6f,
-                                                progress = ((fraction - 0.60f) / 0.28f).coerceIn(0f, 1f),
-                                                status = when {
-                                                    fraction >= 0.88f -> DownloadStageStatus.DONE
-                                                    fraction >= 0.60f -> DownloadStageStatus.DOWNLOADING
-                                                    else -> DownloadStageStatus.WAITING
-                                                },
-                                            ),
-                                            DownloadFileItem(
-                                                fileName = "BUILDING_SPEC (${targetInstance.name})",
-                                                sizeMb = 0.5f,
-                                                progress = ((fraction - 0.88f) / 0.12f).coerceIn(0f, 1f),
-                                                status = when {
-                                                    fraction >= 1.0f -> DownloadStageStatus.DONE
-                                                    fraction >= 0.88f -> DownloadStageStatus.DOWNLOADING
-                                                    else -> DownloadStageStatus.WAITING
-                                                },
-                                            ),
-                                        ),
-                                        isComplete = fraction >= 1f,
+                                    val request = GameLaunchRequest(
+                                        instanceName = targetInstance.name,
+                                        minecraftVersion = targetInstance.mcVersion,
+                                        loaderType = if (targetInstance.loaderType == InstanceLoaderType.FABRIC) "Fabric" else "Vanilla",
+                                        loaderVersion = targetInstance.loaderVersion,
+                                        minecraftRootDir = instanceManager.rootDir,
+                                        instanceGameDir = instanceManager.gameDirFor(targetInstance.id),
+                                        username = activeUsername,
+                                        preferredRenderer = selectedRenderer,
                                     )
+                                    val launchResult = gameEngine.launchGame(
+                                        request = request,
+                                        scope = coroutineScope,
+                                    ) { stage, fraction ->
+                                        val stateLabel = gameEngine.status.value.state.name
+                                        activeEngineTask = activeEngineTask?.copy(
+                                            customStatusTitle = "$stateLabel: $stage",
+                                        )
+                                        engineSnapshot = InstallProgressSnapshot(
+                                            progress = fraction.coerceIn(0f, 1f),
+                                            currentFileName = "$stateLabel: $stage",
+                                            downloadedMb = fraction * 25f,
+                                            totalMb = 25f,
+                                            speedMbPerSec = 5.0f,
+                                            files = listOf(
+                                                DownloadFileItem(
+                                                    fileName = "PREPARING_RUNTIME (${gameEngine.status.value.activeRuntime?.displayName ?: "OpenJDK"})",
+                                                    sizeMb = 19f,
+                                                    progress = (fraction / 0.60f).coerceIn(0f, 1f),
+                                                    status = if (fraction >= 0.60f) DownloadStageStatus.DONE else DownloadStageStatus.DOWNLOADING,
+                                                ),
+                                                DownloadFileItem(
+                                                    fileName = "PREPARING_RENDERER (${selectedRenderer.displayName})",
+                                                    sizeMb = 6f,
+                                                    progress = ((fraction - 0.60f) / 0.28f).coerceIn(0f, 1f),
+                                                    status = when {
+                                                        fraction >= 0.88f -> DownloadStageStatus.DONE
+                                                        fraction >= 0.60f -> DownloadStageStatus.DOWNLOADING
+                                                        else -> DownloadStageStatus.WAITING
+                                                    },
+                                                ),
+                                                DownloadFileItem(
+                                                    fileName = "BUILDING_SPEC (${targetInstance.name})",
+                                                    sizeMb = 0.5f,
+                                                    progress = ((fraction - 0.88f) / 0.12f).coerceIn(0f, 1f),
+                                                    status = when {
+                                                        fraction >= 1.0f -> DownloadStageStatus.DONE
+                                                        fraction >= 0.88f -> DownloadStageStatus.DOWNLOADING
+                                                        else -> DownloadStageStatus.WAITING
+                                                    },
+                                                ),
+                                            ),
+                                            isComplete = fraction >= 1f,
+                                        )
+                                    }
+                                    if (launchResult.isSuccess) {
+                                        delay(900L)
+                                    } else {
+                                        delay(2200L)
+                                    }
+                                } finally {
+                                    activeEngineTask = null
+                                    engineSnapshot = null
+                                    isProgressBarExpanded = false
+                                    activeEngineLaunchJob = null
                                 }
-                                installedRuntimes = gameEngine.jdkManager.listInstalledRuntimes()
-                                rendererInstallStates = RendererType.entries.associateWith {
-                                    gameEngine.rendererManager.isRendererInstalled(it)
-                                }
-                                delay(900L)
-                                activeEngineTask = null
-                                engineSnapshot = null
-                                isProgressBarExpanded = false
                             }
                         }
                     },
@@ -808,6 +952,9 @@ fun LauncherScreen(
                     screenHeight = screenHeight,
                     backgroundConfig = currentBackground,
                     sharedTimeSeconds = sharedTimeSeconds,
+                    blurredBackgroundLayer = sharedPanelBackdropLayer,
+                    backgroundRootOffset = backgroundRootOffset,
+                    backgroundFrameTick = { backgroundFrameTick },
                 )
             }
             }
@@ -827,8 +974,8 @@ fun LauncherScreen(
 
             // 4. Dynamic Island-style Install & Engine ProgressBar at Top-Center
             // Tap it to expand/collapse details showing what it is currently downloading or preparing!
-            AnimatedVisibility(
-                visible = effectiveProgressTask != null,
+            progressTransition.AnimatedVisibility(
+                visible = { it },
                 enter = fadeIn(
                     animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
                 ) + scaleIn(
@@ -863,23 +1010,46 @@ fun LauncherScreen(
                         snapshot = effectiveSnapshot,
                         expanded = isProgressBarExpanded,
                         onToggleExpand = { isProgressBarExpanded = !isProgressBarExpanded },
+                        onCancelTask = {
+                            isProgressBarExpanded = false
+                            if (activeInstallTask != null) {
+                                activeInstallTask = null
+                                installSnapshot = null
+                            }
+                            if (activeEngineTask != null || isEnginePreparing || activeEngineLaunchJob != null) {
+                                activeEngineLaunchJob?.cancel()
+                                activeEngineLaunchJob = null
+                                activeEngineTask = null
+                                engineSnapshot = null
+                                gameEngine.cancelPreparation()
+                            }
+                        },
                         screenWidth = screenWidth,
                         screenHeight = screenHeight,
                         backgroundConfig = currentBackground,
                         sharedTimeSeconds = sharedTimeSeconds,
                         sceneGraphicsLayer = sceneGraphicsLayer,
+                        blurredBackdropLayer = progressBackdropLayer,
+                        backdropRegionLeftPx = regionLeftPx,
+                        backdropRegionTopPx = regionTopPx,
                         topInset = 6.dp,
                     )
                 }
             }
         }
 
-        // 5. Full-screen 20% opacity + full-screen blur Dialog Overlay (Rename Account, Add Account, Add Instance, etc.)
+        // 5. Full-screen 20% opacity + full-screen blur Dialog Overlay (Rename Account, Add Account, Add Instance, Accent Color Picker)
         var isDialogInputFocused by remember(activeDialog) { mutableStateOf(false) }
         FullScreenBlurDialog(
             visible = activeDialog != null,
             isKeyboardActive = isDialogInputFocused,
-            onDismiss = { activeDialog = null },
+            onDismiss = {
+                val current = activeDialog
+                if (current is LauncherDialog.PickAccentColor) {
+                    accentColor = current.initialColor
+                }
+                activeDialog = null
+            },
         ) {
             when (val dialog = displayedDialog) {
                 is LauncherDialog.RenameAccount -> {
@@ -896,6 +1066,39 @@ fun LauncherScreen(
                                 accounts = accounts.map {
                                     if (it.id == dialog.account.id) it.copy(username = trimmed) else it
                                 }
+                            }
+                            activeDialog = null
+                        },
+                    )
+                }
+                is LauncherDialog.ConfirmRemoveAccount -> {
+                    LauncherConfirmDialogContent(
+                        title = stringResource(R.string.dialog_confirm_remove_account_title),
+                        message = stringResource(R.string.dialog_confirm_remove_account_message, dialog.account.username),
+                        confirmText = stringResource(R.string.action_remove),
+                        onCancel = { activeDialog = null },
+                        onConfirm = {
+                            val remaining = accounts.filterNot { it.id == dialog.account.id }
+                            accounts = remaining
+                            if (selectedAccountId == dialog.account.id) {
+                                selectedAccountId = remaining.firstOrNull()?.id.orEmpty()
+                            }
+                            activeDialog = null
+                        },
+                    )
+                }
+                is LauncherDialog.ConfirmRemoveInstance -> {
+                    LauncherConfirmDialogContent(
+                        title = stringResource(R.string.dialog_confirm_remove_instance_title),
+                        message = stringResource(R.string.dialog_confirm_remove_instance_message, dialog.instance.name),
+                        confirmText = stringResource(R.string.action_remove),
+                        onCancel = { activeDialog = null },
+                        onConfirm = {
+                            instanceManager.removeInstance(dialog.instance.id)
+                            val remaining = instanceManager.loadInstances()
+                            instances = remaining
+                            if (selectedInstanceId == dialog.instance.id) {
+                                selectedInstanceId = remaining.firstOrNull()?.id.orEmpty()
                             }
                             activeDialog = null
                         },
@@ -949,9 +1152,28 @@ fun LauncherScreen(
                         },
                     )
                 }
+                is LauncherDialog.PickAccentColor -> {
+                    AccentColorPickerDialogContent(
+                        initialColor = dialog.initialColor,
+                        selectedColor = accentColor,
+                        onPreviewColorChange = { preview -> accentColor = preview },
+                        onFocusChange = { isDialogInputFocused = it },
+                        onCancel = {
+                            accentColor = dialog.initialColor
+                            activeDialog = null
+                        },
+                        onApply = { finalColor ->
+                            accentColor = finalColor
+                            appearancePrefs.saveAccentColor(finalColor)
+                            activeDialog = null
+                        },
+                    )
+                }
                 null -> Unit
             }
         }
+    }
+    }
     }
 }
 
@@ -968,6 +1190,7 @@ fun FullScreenBlurDialog(
     onDismiss: () -> Unit,
     content: @Composable () -> Unit,
 ) {
+    val colors = LauncherTheme.colors
     val density = LocalDensity.current
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -1004,7 +1227,7 @@ fun FullScreenBlurDialog(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.20f))
+                .background(colors.dialogScrim)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -1042,17 +1265,18 @@ private fun LauncherTextInputDialogContent(
     onCancel: () -> Unit,
     onConfirm: () -> Unit,
 ) {
+    val colors = LauncherTheme.colors
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     var isFocused by remember { mutableStateOf(false) }
 
     val inputBorderColor by animateColorAsState(
-        targetValue = if (isFocused) Color(0xFFFFDF8E).copy(alpha = 0.75f) else Color.White.copy(alpha = 0.28f),
+        targetValue = if (isFocused) colors.accentBorderStrong else colors.borderModal,
         animationSpec = tween(durationMillis = 200),
         label = "inputBorderColor",
     )
     val inputBgColor by animateColorAsState(
-        targetValue = if (isFocused) Color.White.copy(alpha = 0.18f) else Color.White.copy(alpha = 0.12f),
+        targetValue = if (isFocused) colors.surfaceInputFocused else colors.surfaceInput,
         animationSpec = tween(durationMillis = 200),
         label = "inputBgColor",
     )
@@ -1062,8 +1286,8 @@ private fun LauncherTextInputDialogContent(
         modifier = Modifier
             .width(320.dp)
             .clip(modalShape)
-            .background(Color(0x33101A2E))
-            .border(1.dp, Color.White.copy(alpha = 0.28f), modalShape)
+            .background(colors.dialogSurface)
+            .border(1.dp, colors.borderModal, modalShape)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -1078,7 +1302,7 @@ private fun LauncherTextInputDialogContent(
     ) {
         Text(
             text = title,
-            color = Color.White,
+            color = colors.textPrimary,
             style = MaterialTheme.typography.titleMedium.copy(
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Bold,
@@ -1091,7 +1315,7 @@ private fun LauncherTextInputDialogContent(
             onValueChange = onValueChange,
             singleLine = true,
             textStyle = TextStyle(
-                color = Color.White,
+                color = colors.textPrimary,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
             ),
@@ -1102,7 +1326,7 @@ private fun LauncherTextInputDialogContent(
                     keyboardController?.hide()
                 },
             ),
-            cursorBrush = SolidColor(Color(0xFFFFDF8E)),
+            cursorBrush = SolidColor(colors.accent),
             modifier = Modifier
                 .fillMaxWidth()
                 .onFocusChanged {
@@ -1132,13 +1356,13 @@ private fun LauncherTextInputDialogContent(
                         },
                     )
                     .clip(btnShape)
-                    .background(Color.White.copy(alpha = 0.10f))
-                    .border(1.dp, Color.White.copy(alpha = 0.22f), btnShape)
+                    .background(colors.surfaceButtonSubtle)
+                    .border(1.dp, colors.borderButton, btnShape)
                     .padding(horizontal = 14.dp, vertical = 8.dp),
             ) {
                 Text(
                     text = stringResource(R.string.action_cancel),
-                    color = Color.White.copy(alpha = 0.85f),
+                    color = colors.textMuted,
                     style = MaterialTheme.typography.labelLarge.copy(
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Medium,
@@ -1157,13 +1381,401 @@ private fun LauncherTextInputDialogContent(
                         },
                     )
                     .clip(btnShape)
-                    .background(Color.White.copy(alpha = 0.24f))
-                    .border(1.dp, Color.White.copy(alpha = 0.42f), btnShape)
+                    .background(colors.surfaceButtonSelected)
+                    .border(1.dp, colors.borderSelectedCard, btnShape)
                     .padding(horizontal = 14.dp, vertical = 8.dp),
             ) {
                 Text(
                     text = confirmText,
-                    color = Color(0xFFFFDF8E),
+                    color = colors.accent,
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                    ),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LauncherConfirmDialogContent(
+    title: String,
+    message: String,
+    confirmText: String,
+    onCancel: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val colors = LauncherTheme.colors
+    val modalShape = RoundedCornerShape(18.dp)
+    val btnShape = RoundedCornerShape(10.dp)
+
+    Column(
+        modifier = Modifier
+            .width(320.dp)
+            .clip(modalShape)
+            .background(colors.dialogSurface)
+            .border(1.dp, colors.borderModal, modalShape)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {},
+            )
+            .padding(horizontal = 18.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(
+            text = title,
+            color = colors.textPrimary,
+            style = MaterialTheme.typography.titleMedium.copy(
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+            ),
+        )
+
+        Text(
+            text = message,
+            color = colors.textSubtle,
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontSize = 13.sp,
+            ),
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .smoothPressClickable(
+                        pressScale = 0.94f,
+                        onClick = onCancel,
+                    )
+                    .clip(btnShape)
+                    .background(colors.surfaceButtonSubtle)
+                    .border(1.dp, colors.borderButton, btnShape)
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.action_cancel),
+                    color = colors.textMuted,
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                    ),
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Box(
+                modifier = Modifier
+                    .smoothPressClickable(
+                        pressScale = 0.94f,
+                        onClick = onConfirm,
+                    )
+                    .clip(btnShape)
+                    .background(colors.errorContainer)
+                    .border(1.dp, colors.errorBorderStrong, btnShape)
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+            ) {
+                Text(
+                    text = confirmText,
+                    color = colors.errorText,
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                    ),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AccentColorPickerDialogContent(
+    initialColor: Color,
+    selectedColor: Color,
+    onPreviewColorChange: (Color) -> Unit,
+    onFocusChange: (Boolean) -> Unit = {},
+    onCancel: () -> Unit,
+    onApply: (Color) -> Unit,
+) {
+    val colors = LauncherTheme.colors
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    val initialHsv = remember(initialColor) { colorToHsv(initialColor) }
+    var hue by remember(initialColor) { androidx.compose.runtime.mutableFloatStateOf(initialHsv[0]) }
+    var saturation by remember(initialColor) { androidx.compose.runtime.mutableFloatStateOf(initialHsv[1]) }
+    var brightness by remember(initialColor) { androidx.compose.runtime.mutableFloatStateOf(initialHsv[2]) }
+    var hexInput by remember(initialColor) { mutableStateOf(formatColorHex(selectedColor)) }
+    var isHexFocused by remember { mutableStateOf(false) }
+
+    fun updateFromHsv(newH: Float = hue, newS: Float = saturation, newV: Float = brightness) {
+        hue = ((newH % 360f) + 360f) % 360f
+        saturation = newS.coerceIn(0f, 1f)
+        brightness = newV.coerceIn(0f, 1f)
+        val picked = hsvToColor(hue, saturation, brightness)
+        hexInput = formatColorHex(picked)
+        onPreviewColorChange(picked)
+    }
+
+    val hexBorderColor by animateColorAsState(
+        targetValue = if (isHexFocused) colors.accentBorderStrong else colors.borderModal,
+        animationSpec = tween(durationMillis = 180),
+        label = "hexInputBorderColor",
+    )
+    val hexBgColor by animateColorAsState(
+        targetValue = if (isHexFocused) colors.surfaceInputFocused else colors.surfaceInput,
+        animationSpec = tween(durationMillis = 180),
+        label = "hexInputBgColor",
+    )
+
+    val modalShape = RoundedCornerShape(20.dp)
+    Column(
+        modifier = Modifier
+            .width(460.dp)
+            .clip(modalShape)
+            .background(colors.dialogSurface)
+            .border(1.dp, colors.borderModal, modalShape)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {
+                    focusManager.clearFocus(force = true)
+                    keyboardController?.hide()
+                },
+            )
+            .padding(horizontal = 20.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.dialog_color_picker_title),
+            color = colors.textPrimary,
+            style = MaterialTheme.typography.titleMedium.copy(
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+            ),
+        )
+
+        // Interactive 2D Saturation x Value gradient + Hue spectrum + Hex
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // 2D Saturation (X) x Brightness (Y) Square
+            val pureHueColor = remember(hue) { hsvToColor(hue, 1f, 1f) }
+            val padShape = RoundedCornerShape(12.dp)
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(132.dp)
+                    .clip(padShape)
+                    .border(1.dp, colors.borderButton, padShape)
+                    .pointerInput(Unit) {
+                        detectTapGestures { offset ->
+                            val sx = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
+                            val vy = 1f - (offset.y / size.height.toFloat()).coerceIn(0f, 1f)
+                            updateFromHsv(newS = sx, newV = vy)
+                        }
+                    }
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, _ ->
+                            change.consume()
+                            val sx = (change.position.x / size.width.toFloat()).coerceIn(0f, 1f)
+                            val vy = 1f - (change.position.y / size.height.toFloat()).coerceIn(0f, 1f)
+                            updateFromHsv(newS = sx, newV = vy)
+                        }
+                    },
+            ) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    drawRect(
+                        brush = Brush.horizontalGradient(
+                            listOf(LauncherColorTokens.White, pureHueColor),
+                        ),
+                    )
+                    drawRect(
+                        brush = Brush.verticalGradient(
+                            listOf(LauncherColorTokens.Transparent, LauncherColorTokens.Black),
+                        ),
+                    )
+                    val cx = saturation * size.width
+                    val cy = (1f - brightness) * size.height
+                    drawCircle(
+                        color = colors.black.copy(alpha = 0.55f),
+                        radius = 8.dp.toPx(),
+                        center = androidx.compose.ui.geometry.Offset(cx, cy),
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx()),
+                    )
+                    drawCircle(
+                        color = colors.white,
+                        radius = 6.5.dp.toPx(),
+                        center = androidx.compose.ui.geometry.Offset(cx, cy),
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx()),
+                    )
+                }
+            }
+
+            // Right Controls: Hue bar + Hex input
+            Column(
+                modifier = Modifier.width(196.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.dialog_color_picker_hue),
+                    color = colors.textMuted,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                )
+
+                val hueShape = RoundedCornerShape(10.dp)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(22.dp)
+                        .clip(hueShape)
+                        .border(1.dp, colors.borderButton, hueShape)
+                        .pointerInput(Unit) {
+                            detectTapGestures { offset ->
+                                val h = (offset.x / size.width.toFloat()).coerceIn(0f, 1f) * 360f
+                                updateFromHsv(newH = h)
+                            }
+                        }
+                        .pointerInput(Unit) {
+                            detectDragGestures { change, _ ->
+                                change.consume()
+                                val h = (change.position.x / size.width.toFloat()).coerceIn(0f, 1f) * 360f
+                                updateFromHsv(newH = h)
+                            }
+                        },
+                ) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        drawRect(brush = Brush.horizontalGradient(LauncherColorTokens.HueSpectrum))
+                        val thumbX = (hue / 360f).coerceIn(0f, 1f) * size.width
+                        drawCircle(
+                            color = colors.black.copy(alpha = 0.50f),
+                            radius = 7.dp.toPx(),
+                            center = androidx.compose.ui.geometry.Offset(thumbX, size.height * 0.5f),
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx()),
+                        )
+                        drawCircle(
+                            color = colors.white,
+                            radius = 5.5.dp.toPx(),
+                            center = androidx.compose.ui.geometry.Offset(thumbX, size.height * 0.5f),
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx()),
+                        )
+                    }
+                }
+
+                // Hex input
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.dialog_color_picker_hex_label),
+                        color = colors.textDim,
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                    )
+                    val inputShape = RoundedCornerShape(9.dp)
+                    BasicTextField(
+                        value = hexInput,
+                        onValueChange = { next ->
+                            val filtered = next.uppercase().filter { it == '#' || it in '0'..'9' || it in 'A'..'F' }.take(9)
+                            hexInput = filtered
+                            parseHexColorOrNull(filtered)?.let { parsed ->
+                                val hsv = colorToHsv(parsed)
+                                if (hsv[1] > 0.01f && hsv[2] > 0.01f) {
+                                    hue = hsv[0]
+                                }
+                                saturation = hsv[1]
+                                brightness = hsv[2]
+                                onPreviewColorChange(parsed)
+                            }
+                        },
+                        singleLine = true,
+                        textStyle = TextStyle(
+                            color = colors.textPrimary,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(
+                            onDone = {
+                                focusManager.clearFocus(force = true)
+                                keyboardController?.hide()
+                            },
+                        ),
+                        cursorBrush = SolidColor(colors.accent),
+                        modifier = Modifier
+                            .weight(1f)
+                            .onFocusChanged {
+                                isHexFocused = it.isFocused
+                                onFocusChange(it.isFocused)
+                            }
+                            .clip(inputShape)
+                            .background(hexBgColor)
+                            .border(1.dp, hexBorderColor, inputShape)
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                    )
+                }
+            }
+        }
+
+        // Bottom actions: Cancel (left) + Apply (right)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            val btnShape = RoundedCornerShape(10.dp)
+            Box(
+                modifier = Modifier
+                    .smoothPressClickable(
+                        pressScale = 0.94f,
+                        onClick = {
+                            focusManager.clearFocus(force = true)
+                            keyboardController?.hide()
+                            onCancel()
+                        },
+                    )
+                    .clip(btnShape)
+                    .background(colors.surfaceButtonSubtle)
+                    .border(1.dp, colors.borderButton, btnShape)
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.action_cancel),
+                    color = colors.textMuted,
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                    ),
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .smoothPressClickable(
+                        pressScale = 0.94f,
+                        onClick = {
+                            focusManager.clearFocus(force = true)
+                            keyboardController?.hide()
+                            onApply(selectedColor)
+                        },
+                    )
+                    .clip(btnShape)
+                    .background(colors.surfaceButtonSelected)
+                    .border(1.dp, colors.borderSelectedCard, btnShape)
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.action_apply),
+                    color = colors.accent,
                     style = MaterialTheme.typography.labelLarge.copy(
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
@@ -1187,6 +1799,7 @@ private fun AddInstanceDialogContent(
     onCancel: () -> Unit,
     onInstall: (loaderType: InstanceLoaderType, mcVersion: String, loaderVersion: String?, instanceName: String) -> Unit,
 ) {
+    val colors = LauncherTheme.colors
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -1265,8 +1878,8 @@ private fun AddInstanceDialogContent(
         modifier = Modifier
             .width(modalWidth)
             .clip(modalShape)
-            .background(Color(0x33101A2E))
-            .border(1.dp, Color.White.copy(alpha = 0.28f), modalShape)
+            .background(colors.dialogSurface)
+            .border(1.dp, colors.borderModal, modalShape)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -1307,7 +1920,7 @@ private fun AddInstanceDialogContent(
                     ) {
                         Text(
                             text = stringResource(R.string.select_instance_type),
-                            color = Color.White,
+                            color = colors.textPrimary,
                             style = MaterialTheme.typography.titleMedium.copy(
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.Bold,
@@ -1335,29 +1948,29 @@ private fun AddInstanceDialogContent(
                                         )
                                         .clip(cardShape)
                                         .background(
-                                            if (enabled) Color.White.copy(alpha = 0.14f)
-                                            else Color.White.copy(alpha = 0.05f),
+                                            if (enabled) colors.surfaceButton
+                                            else colors.surfaceCardMuted,
                                         )
                                         .border(
                                             width = 1.dp,
-                                            color = if (enabled) Color.White.copy(alpha = 0.30f)
-                                            else Color.White.copy(alpha = 0.12f),
+                                            color = if (enabled) colors.borderButtonStrong
+                                            else colors.borderSubtle,
                                             shape = cardShape,
                                         )
                                         .padding(vertical = 18.dp, horizontal = 8.dp),
                                     horizontalAlignment = Alignment.CenterHorizontally,
                                     verticalArrangement = Arrangement.Center,
                                 ) {
-                                    Icon(
-                                        painter = painterResource(id = loaderType.iconRes),
+                                    InstanceLoaderIcon(
+                                        loaderType = loaderType,
                                         contentDescription = title,
-                                        tint = if (enabled) Color.White else Color.White.copy(alpha = 0.38f),
+                                        defaultTint = if (enabled) colors.iconPrimary else colors.iconDisabled,
                                         modifier = Modifier.size(30.dp),
                                     )
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
                                         text = title,
-                                        color = if (enabled) Color.White else Color.White.copy(alpha = 0.42f),
+                                        color = if (enabled) colors.textPrimary else colors.textDisabled,
                                         style = MaterialTheme.typography.labelLarge.copy(
                                             fontSize = 13.sp,
                                             fontWeight = if (enabled) FontWeight.Bold else FontWeight.Medium,
@@ -1379,13 +1992,13 @@ private fun AddInstanceDialogContent(
                                 modifier = Modifier
                                     .smoothPressClickable(pressScale = 0.94f, onClick = onCancel)
                                     .clip(btnShape)
-                                    .background(Color.White.copy(alpha = 0.10f))
-                                    .border(1.dp, Color.White.copy(alpha = 0.22f), btnShape)
+                                    .background(colors.surfaceButtonSubtle)
+                                    .border(1.dp, colors.borderButton, btnShape)
                                     .padding(horizontal = 14.dp, vertical = 8.dp),
                             ) {
                                 Text(
                                     text = stringResource(R.string.action_cancel),
-                                    color = Color.White.copy(alpha = 0.85f),
+                                    color = colors.textMuted,
                                     style = MaterialTheme.typography.labelLarge.copy(
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Medium,
@@ -1435,7 +2048,7 @@ private fun AddInstanceDialogContent(
                         ) {
                             Text(
                                 text = stringResource(R.string.select_minecraft_version),
-                                color = Color.White,
+                                color = colors.textPrimary,
                                 style = MaterialTheme.typography.titleMedium.copy(
                                     fontSize = 16.sp,
                                     fontWeight = FontWeight.Bold,
@@ -1445,19 +2058,19 @@ private fun AddInstanceDialogContent(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(Color.White.copy(alpha = 0.14f))
+                                    .background(colors.surfaceButton)
                                     .padding(horizontal = 10.dp, vertical = 5.dp),
                             ) {
-                                Icon(
-                                    painter = painterResource(id = step.loaderType.iconRes),
+                                InstanceLoaderIcon(
+                                    loaderType = step.loaderType,
                                     contentDescription = loaderTitle,
-                                    tint = Color(0xFFFFDF8E),
+                                    defaultTint = colors.accent,
                                     modifier = Modifier.size(16.dp),
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
                                     text = loaderTitle,
-                                    color = Color(0xFFFFDF8E),
+                                    color = colors.accent,
                                     style = MaterialTheme.typography.labelSmall.copy(
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Bold,
@@ -1480,18 +2093,8 @@ private fun AddInstanceDialogContent(
                             filterTabs.forEach { (filter, labelRes) ->
                                 val isFilterSelected = selectedFilter == filter
                                 val chipShape = RoundedCornerShape(10.dp)
-                                val chipBg by animateColorAsState(
-                                    targetValue = if (isFilterSelected) Color(0xFFFFDF8E).copy(alpha = 0.22f) else Color.White.copy(alpha = 0.08f),
-                                    animationSpec = tween(180),
-                                    label = "filterChipBg",
-                                )
-                                val chipBorder by animateColorAsState(
-                                    targetValue = if (isFilterSelected) Color(0xFFFFDF8E).copy(alpha = 0.55f) else Color.White.copy(alpha = 0.16f),
-                                    animationSpec = tween(180),
-                                    label = "filterChipBorder",
-                                )
                                 val chipText by animateColorAsState(
-                                    targetValue = if (isFilterSelected) Color(0xFFFFDF8E) else Color.White.copy(alpha = 0.78f),
+                                    targetValue = if (isFilterSelected) colors.accent else colors.textSubtle,
                                     animationSpec = tween(180),
                                     label = "filterChipText",
                                 )
@@ -1503,8 +2106,8 @@ private fun AddInstanceDialogContent(
                                             onClick = { selectedFilter = filter },
                                         )
                                         .clip(chipShape)
-                                        .background(chipBg)
-                                        .border(1.dp, chipBorder, chipShape)
+                                        .background(colors.surfaceCard)
+                                        .border(1.dp, colors.borderDefault, chipShape)
                                         .padding(vertical = 7.dp, horizontal = 8.dp),
                                     contentAlignment = Alignment.Center,
                                 ) {
@@ -1535,13 +2138,13 @@ private fun AddInstanceDialogContent(
                                         verticalArrangement = Arrangement.spacedBy(10.dp),
                                     ) {
                                         CircularProgressIndicator(
-                                            color = Color(0xFFFFDF8E),
+                                            color = colors.accent,
                                             strokeWidth = 2.5.dp,
                                             modifier = Modifier.size(28.dp),
                                         )
                                         Text(
                                             text = stringResource(R.string.loading_versions),
-                                            color = Color.White.copy(alpha = 0.80f),
+                                            color = colors.textSubtle,
                                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
                                         )
                                     }
@@ -1554,7 +2157,7 @@ private fun AddInstanceDialogContent(
                                     ) {
                                         Text(
                                             text = versionsError ?: stringResource(R.string.error_loading_versions),
-                                            color = Color(0xFFFFB2B4),
+                                            color = colors.errorText,
                                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
                                             maxLines = 2,
                                             overflow = TextOverflow.Ellipsis,
@@ -1567,13 +2170,13 @@ private fun AddInstanceDialogContent(
                                                     onClick = { manifestReloadKey++ },
                                                 )
                                                 .clip(retryShape)
-                                                .background(Color.White.copy(alpha = 0.16f))
-                                                .border(1.dp, Color.White.copy(alpha = 0.34f), retryShape)
+                                                .background(colors.surfaceBadge)
+                                                .border(1.dp, colors.borderHighlightTop, retryShape)
                                                 .padding(horizontal = 14.dp, vertical = 7.dp),
                                         ) {
                                             Text(
                                                 text = stringResource(R.string.action_retry),
-                                                color = Color(0xFFFFDF8E),
+                                                color = colors.accent,
                                                 style = MaterialTheme.typography.labelMedium.copy(
                                                     fontSize = 12.sp,
                                                     fontWeight = FontWeight.Bold,
@@ -1585,7 +2188,7 @@ private fun AddInstanceDialogContent(
                                 filteredVersions.isEmpty() -> {
                                     Text(
                                         text = stringResource(R.string.no_versions_for_filter),
-                                        color = Color.White.copy(alpha = 0.70f),
+                                        color = colors.textDim,
                                         style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp),
                                     )
                                 }
@@ -1600,101 +2203,38 @@ private fun AddInstanceDialogContent(
                                         ) { entry ->
                                             val version = entry.id
                                             val isSelected = version == selectedMcVersion
-                                            val rowShape = RoundedCornerShape(14.dp)
-                                            val rowBg by animateColorAsState(
-                                                targetValue = if (isSelected) Color.White.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.08f),
-                                                animationSpec = tween(180),
-                                                label = "mcVersionRowBg",
-                                            )
-                                            val rowBorder by animateColorAsState(
-                                                targetValue = if (isSelected) Color.White.copy(alpha = 0.42f) else Color.White.copy(alpha = 0.14f),
-                                                animationSpec = tween(180),
-                                                label = "mcVersionRowBorder",
-                                            )
-                                            val rowTextColor by animateColorAsState(
-                                                targetValue = if (isSelected) Color(0xFFFFDF8E) else Color.White,
-                                                animationSpec = tween(180),
-                                                label = "mcVersionRowText",
-                                            )
-                                            val badgeLabel = when {
-                                                version == versionManifest?.latestRelease ||
-                                                    version == versionManifest?.latestSnapshot -> stringResource(R.string.version_badge_latest)
-                                                entry.type == "old_beta" -> stringResource(R.string.version_badge_beta)
-                                                entry.type == "old_alpha" -> stringResource(R.string.version_badge_alpha)
-                                                else -> null
+                                            val releaseDateLabel = remember(entry.releaseTime) {
+                                                OfficialMinecraftApi.formatReleaseDate(entry.releaseTime)
                                             }
-
-                                            Row(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .smoothPressClickable(
-                                                        pressScale = 0.97f,
-                                                        onClick = {
-                                                            selectedMcVersion = version
-                                                            if (step.loaderType == InstanceLoaderType.FABRIC) {
-                                                                currentStep = AddInstanceStep.SelectLoaderVersion(
-                                                                    loaderType = step.loaderType,
-                                                                    mcVersion = version,
-                                                                )
-                                                            } else {
-                                                                instanceNameInput = context.getString(R.string.instance_vanilla_format, version)
-                                                                currentStep = AddInstanceStep.EnterInstanceName(
-                                                                    loaderType = step.loaderType,
-                                                                    mcVersion = version,
-                                                                    loaderVersion = null,
-                                                                )
-                                                            }
-                                                        },
-                                                    )
-                                                    .clip(rowShape)
-                                                    .background(rowBg)
-                                                    .border(1.dp, rowBorder, rowShape)
-                                                    .padding(horizontal = 14.dp, vertical = 11.dp),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.SpaceBetween,
-                                            ) {
-                                                Row(
-                                                    modifier = Modifier.weight(1f),
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                ) {
+                                            VersionSelectionRow(
+                                                label = version,
+                                                releaseDate = releaseDateLabel,
+                                                isSelected = isSelected,
+                                                onClick = {
+                                                    selectedMcVersion = version
+                                                    if (step.loaderType == InstanceLoaderType.FABRIC) {
+                                                        currentStep = AddInstanceStep.SelectLoaderVersion(
+                                                            loaderType = step.loaderType,
+                                                            mcVersion = version,
+                                                        )
+                                                    } else {
+                                                        instanceNameInput = context.getString(R.string.instance_vanilla_format, version)
+                                                        currentStep = AddInstanceStep.EnterInstanceName(
+                                                            loaderType = step.loaderType,
+                                                            mcVersion = version,
+                                                            loaderVersion = null,
+                                                        )
+                                                    }
+                                                },
+                                                leadingIcon = { tint ->
                                                     Icon(
                                                         painter = painterResource(id = R.drawable.ic_instances),
                                                         contentDescription = version,
-                                                        tint = rowTextColor,
+                                                        tint = tint,
                                                         modifier = Modifier.size(20.dp),
                                                     )
-                                                    Spacer(modifier = Modifier.width(12.dp))
-                                                    Text(
-                                                        text = version,
-                                                        color = rowTextColor,
-                                                        style = MaterialTheme.typography.bodyLarge.copy(
-                                                            fontSize = 14.sp,
-                                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                                        ),
-                                                        maxLines = 1,
-                                                        overflow = TextOverflow.Ellipsis,
-                                                    )
-                                                }
-
-                                                if (badgeLabel != null) {
-                                                    Box(
-                                                        modifier = Modifier
-                                                            .clip(RoundedCornerShape(6.dp))
-                                                            .background(Color(0xFFFFDF8E).copy(alpha = 0.18f))
-                                                            .border(1.dp, Color(0xFFFFDF8E).copy(alpha = 0.40f), RoundedCornerShape(6.dp))
-                                                            .padding(horizontal = 8.dp, vertical = 3.dp),
-                                                    ) {
-                                                        Text(
-                                                            text = badgeLabel,
-                                                            color = Color(0xFFFFDF8E),
-                                                            style = MaterialTheme.typography.labelSmall.copy(
-                                                                fontSize = 11.sp,
-                                                                fontWeight = FontWeight.Bold,
-                                                            ),
-                                                        )
-                                                    }
-                                                }
-                                            }
+                                                },
+                                            )
                                         }
                                     }
                                 }
@@ -1716,13 +2256,13 @@ private fun AddInstanceDialogContent(
                                         onClick = { currentStep = AddInstanceStep.SelectType },
                                     )
                                     .clip(btnShape)
-                                    .background(Color.White.copy(alpha = 0.10f))
-                                    .border(1.dp, Color.White.copy(alpha = 0.22f), btnShape)
+                                    .background(colors.surfaceButtonSubtle)
+                                    .border(1.dp, colors.borderButton, btnShape)
                                     .padding(horizontal = 16.dp, vertical = 9.dp),
                             ) {
                                 Text(
                                     text = stringResource(R.string.action_back),
-                                    color = Color.White.copy(alpha = 0.85f),
+                                    color = colors.textMuted,
                                     style = MaterialTheme.typography.labelLarge.copy(
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Medium,
@@ -1752,17 +2292,17 @@ private fun AddInstanceDialogContent(
                                         },
                                     )
                                     .clip(btnShape)
-                                    .background(if (canProceed) Color.White.copy(alpha = 0.24f) else Color.White.copy(alpha = 0.08f))
+                                    .background(if (canProceed) colors.surfaceButtonSelected else colors.surfaceButtonDisabled)
                                     .border(
                                         1.dp,
-                                        if (canProceed) Color.White.copy(alpha = 0.42f) else Color.White.copy(alpha = 0.14f),
+                                        if (canProceed) colors.borderSelectedCard else colors.borderSubtle,
                                         btnShape,
                                     )
                                     .padding(horizontal = 16.dp, vertical = 9.dp),
                             ) {
                                 Text(
                                     text = stringResource(R.string.action_next),
-                                    color = if (canProceed) Color(0xFFFFDF8E) else Color.White.copy(alpha = 0.35f),
+                                    color = if (canProceed) colors.accent else colors.textActionDisabled,
                                     style = MaterialTheme.typography.labelLarge.copy(
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Bold,
@@ -1785,7 +2325,7 @@ private fun AddInstanceDialogContent(
                         ) {
                             Text(
                                 text = stringResource(R.string.select_loader_version),
-                                color = Color.White,
+                                color = colors.textPrimary,
                                 style = MaterialTheme.typography.titleMedium.copy(
                                     fontSize = 16.sp,
                                     fontWeight = FontWeight.Bold,
@@ -1795,19 +2335,19 @@ private fun AddInstanceDialogContent(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(Color.White.copy(alpha = 0.14f))
+                                    .background(colors.surfaceButton)
                                     .padding(horizontal = 10.dp, vertical = 5.dp),
                             ) {
-                                Icon(
-                                    painter = painterResource(id = R.drawable.ic_fabric),
+                                InstanceLoaderIcon(
+                                    loaderType = InstanceLoaderType.FABRIC,
                                     contentDescription = step.mcVersion,
-                                    tint = Color(0xFFFFDF8E),
+                                    defaultTint = colors.accent,
                                     modifier = Modifier.size(16.dp),
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
                                     text = step.mcVersion,
-                                    color = Color(0xFFFFDF8E),
+                                    color = colors.accent,
                                     style = MaterialTheme.typography.labelSmall.copy(
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Bold,
@@ -1829,13 +2369,13 @@ private fun AddInstanceDialogContent(
                                         verticalArrangement = Arrangement.spacedBy(10.dp),
                                     ) {
                                         CircularProgressIndicator(
-                                            color = Color(0xFFFFDF8E),
+                                            color = colors.accent,
                                             strokeWidth = 2.5.dp,
                                             modifier = Modifier.size(28.dp),
                                         )
                                         Text(
                                             text = stringResource(R.string.loading_fabric_loaders),
-                                            color = Color.White.copy(alpha = 0.80f),
+                                            color = colors.white.copy(alpha = 0.80f),
                                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
                                         )
                                     }
@@ -1848,7 +2388,7 @@ private fun AddInstanceDialogContent(
                                     ) {
                                         Text(
                                             text = loadersError ?: stringResource(R.string.error_loading_versions),
-                                            color = Color(0xFFFFB2B4),
+                                            color = colors.errorText,
                                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
                                             maxLines = 2,
                                             overflow = TextOverflow.Ellipsis,
@@ -1861,13 +2401,13 @@ private fun AddInstanceDialogContent(
                                                     onClick = { loaderReloadKey++ },
                                                 )
                                                 .clip(retryShape)
-                                                .background(Color.White.copy(alpha = 0.16f))
-                                                .border(1.dp, Color.White.copy(alpha = 0.34f), retryShape)
+                                                .background(colors.surfaceBadge)
+                                                .border(1.dp, colors.borderHighlightTop, retryShape)
                                                 .padding(horizontal = 14.dp, vertical = 7.dp),
                                         ) {
                                             Text(
                                                 text = stringResource(R.string.action_retry),
-                                                color = Color(0xFFFFDF8E),
+                                                color = colors.accent,
                                                 style = MaterialTheme.typography.labelMedium.copy(
                                                     fontSize = 12.sp,
                                                     fontWeight = FontWeight.Bold,
@@ -1879,7 +2419,7 @@ private fun AddInstanceDialogContent(
                                 fabricLoaders.isEmpty() -> {
                                     Text(
                                         text = stringResource(R.string.no_versions_for_filter),
-                                        color = Color.White.copy(alpha = 0.70f),
+                                        color = colors.white.copy(alpha = 0.70f),
                                         style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp),
                                     )
                                 }
@@ -1894,82 +2434,31 @@ private fun AddInstanceDialogContent(
                                         ) { loaderEntry ->
                                             val loaderVer = loaderEntry.version
                                             val isSelected = loaderVer == selectedLoaderVersion
-                                            val rowShape = RoundedCornerShape(14.dp)
-                                            val rowBg by animateColorAsState(
-                                                targetValue = if (isSelected) Color.White.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.08f),
-                                                animationSpec = tween(180),
-                                                label = "loaderRowBg",
-                                            )
-                                            val rowBorder by animateColorAsState(
-                                                targetValue = if (isSelected) Color.White.copy(alpha = 0.42f) else Color.White.copy(alpha = 0.14f),
-                                                animationSpec = tween(180),
-                                                label = "loaderRowBorder",
-                                            )
-                                            val rowTextColor by animateColorAsState(
-                                                targetValue = if (isSelected) Color(0xFFFFDF8E) else Color.White,
-                                                animationSpec = tween(180),
-                                                label = "loaderRowText",
-                                            )
-
-                                            Row(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .smoothPressClickable(
-                                                        pressScale = 0.97f,
-                                                        onClick = {
-                                                            selectedLoaderVersion = loaderVer
-                                                            instanceNameInput = context.getString(R.string.instance_fabric_short_format, step.mcVersion)
-                                                            currentStep = AddInstanceStep.EnterInstanceName(
-                                                                loaderType = step.loaderType,
-                                                                mcVersion = step.mcVersion,
-                                                                loaderVersion = loaderVer,
-                                                            )
-                                                        },
+                                            val releaseDateLabel = remember(loaderEntry.releaseTime) {
+                                                OfficialMinecraftApi.formatReleaseDate(loaderEntry.releaseTime)
+                                            }
+                                            VersionSelectionRow(
+                                                label = loaderVer,
+                                                releaseDate = releaseDateLabel,
+                                                isSelected = isSelected,
+                                                onClick = {
+                                                    selectedLoaderVersion = loaderVer
+                                                    instanceNameInput = context.getString(R.string.instance_fabric_short_format, step.mcVersion)
+                                                    currentStep = AddInstanceStep.EnterInstanceName(
+                                                        loaderType = step.loaderType,
+                                                        mcVersion = step.mcVersion,
+                                                        loaderVersion = loaderVer,
                                                     )
-                                                    .clip(rowShape)
-                                                    .background(rowBg)
-                                                    .border(1.dp, rowBorder, rowShape)
-                                                    .padding(horizontal = 14.dp, vertical = 11.dp),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.SpaceBetween,
-                                            ) {
-                                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                                    Icon(
-                                                        painter = painterResource(id = R.drawable.ic_fabric),
+                                                },
+                                                leadingIcon = { tint ->
+                                                    InstanceLoaderIcon(
+                                                        loaderType = InstanceLoaderType.FABRIC,
                                                         contentDescription = loaderVer,
-                                                        tint = rowTextColor,
+                                                        defaultTint = tint,
                                                         modifier = Modifier.size(20.dp),
                                                     )
-                                                    Spacer(modifier = Modifier.width(12.dp))
-                                                    Text(
-                                                        text = loaderVer,
-                                                        color = rowTextColor,
-                                                        style = MaterialTheme.typography.bodyLarge.copy(
-                                                            fontSize = 14.sp,
-                                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                                        ),
-                                                    )
-                                                }
-
-                                                if (loaderEntry.stable) {
-                                                    Box(
-                                                        modifier = Modifier
-                                                            .clip(RoundedCornerShape(6.dp))
-                                                            .background(Color(0xFFFFDF8E).copy(alpha = 0.18f))
-                                                            .border(1.dp, Color(0xFFFFDF8E).copy(alpha = 0.40f), RoundedCornerShape(6.dp))
-                                                            .padding(horizontal = 8.dp, vertical = 3.dp),
-                                                    ) {
-                                                        Text(
-                                                            text = stringResource(R.string.loader_stable_badge),
-                                                            color = Color(0xFFFFDF8E),
-                                                            style = MaterialTheme.typography.labelSmall.copy(
-                                                                fontSize = 11.sp,
-                                                                fontWeight = FontWeight.Bold,
-                                                            ),
-                                                        )
-                                                    }
-                                                }
-                                            }
+                                                },
+                                            )
                                         }
                                     }
                                 }
@@ -1993,13 +2482,13 @@ private fun AddInstanceDialogContent(
                                         },
                                     )
                                     .clip(btnShape)
-                                    .background(Color.White.copy(alpha = 0.10f))
-                                    .border(1.dp, Color.White.copy(alpha = 0.22f), btnShape)
+                                    .background(colors.surfaceButtonSubtle)
+                                    .border(1.dp, colors.borderButton, btnShape)
                                     .padding(horizontal = 16.dp, vertical = 9.dp),
                             ) {
                                 Text(
                                     text = stringResource(R.string.action_back),
-                                    color = Color.White.copy(alpha = 0.85f),
+                                    color = colors.textMuted,
                                     style = MaterialTheme.typography.labelLarge.copy(
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Medium,
@@ -2022,17 +2511,17 @@ private fun AddInstanceDialogContent(
                                         },
                                     )
                                     .clip(btnShape)
-                                    .background(if (canProceedLoader) Color.White.copy(alpha = 0.24f) else Color.White.copy(alpha = 0.08f))
+                                    .background(if (canProceedLoader) colors.surfaceButtonSelected else colors.surfaceButtonDisabled)
                                     .border(
                                         1.dp,
-                                        if (canProceedLoader) Color.White.copy(alpha = 0.42f) else Color.White.copy(alpha = 0.14f),
+                                        if (canProceedLoader) colors.borderSelectedCard else colors.borderSubtle,
                                         btnShape,
                                     )
                                     .padding(horizontal = 16.dp, vertical = 9.dp),
                             ) {
                                 Text(
                                     text = stringResource(R.string.action_next),
-                                    color = if (canProceedLoader) Color(0xFFFFDF8E) else Color.White.copy(alpha = 0.35f),
+                                    color = if (canProceedLoader) colors.accent else colors.textActionDisabled,
                                     style = MaterialTheme.typography.labelLarge.copy(
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Bold,
@@ -2045,12 +2534,12 @@ private fun AddInstanceDialogContent(
 
                 is AddInstanceStep.EnterInstanceName -> {
                     val inputBorderColor by animateColorAsState(
-                        targetValue = if (isNameFieldFocused) Color(0xFFFFDF8E).copy(alpha = 0.75f) else Color.White.copy(alpha = 0.28f),
+                        targetValue = if (isNameFieldFocused) colors.accentBorderStrong else colors.borderModal,
                         animationSpec = tween(durationMillis = 200),
                         label = "instanceNameBorderColor",
                     )
                     val inputBgColor by animateColorAsState(
-                        targetValue = if (isNameFieldFocused) Color.White.copy(alpha = 0.18f) else Color.White.copy(alpha = 0.12f),
+                        targetValue = if (isNameFieldFocused) colors.surfaceInputFocused else colors.surfaceInput,
                         animationSpec = tween(durationMillis = 200),
                         label = "instanceNameBgColor",
                     )
@@ -2071,7 +2560,7 @@ private fun AddInstanceDialogContent(
                         ) {
                             Text(
                                 text = stringResource(R.string.enter_instance_name),
-                                color = Color.White,
+                                color = colors.textPrimary,
                                 style = MaterialTheme.typography.titleMedium.copy(
                                     fontSize = 15.sp,
                                     fontWeight = FontWeight.Bold,
@@ -2081,19 +2570,19 @@ private fun AddInstanceDialogContent(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(Color.White.copy(alpha = 0.14f))
+                                    .background(colors.surfaceButton)
                                     .padding(horizontal = 8.dp, vertical = 4.dp),
                             ) {
-                                Icon(
-                                    painter = painterResource(id = step.loaderType.iconRes),
+                                InstanceLoaderIcon(
+                                    loaderType = step.loaderType,
                                     contentDescription = badgeText,
-                                    tint = Color(0xFFFFDF8E),
+                                    defaultTint = colors.accent,
                                     modifier = Modifier.size(14.dp),
                                 )
                                 Spacer(modifier = Modifier.width(5.dp))
                                 Text(
                                     text = badgeText,
-                                    color = Color(0xFFFFDF8E),
+                                    color = colors.accent,
                                     style = MaterialTheme.typography.labelSmall.copy(
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,
@@ -2108,7 +2597,7 @@ private fun AddInstanceDialogContent(
                             onValueChange = { instanceNameInput = it },
                             singleLine = true,
                             textStyle = TextStyle(
-                                color = Color.White,
+                                color = colors.textPrimary,
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Medium,
                             ),
@@ -2119,7 +2608,7 @@ private fun AddInstanceDialogContent(
                                     keyboardController?.hide()
                                 },
                             ),
-                            cursorBrush = SolidColor(Color(0xFFFFDF8E)),
+                            cursorBrush = SolidColor(colors.accent),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .onFocusChanged {
@@ -2155,13 +2644,13 @@ private fun AddInstanceDialogContent(
                                         },
                                     )
                                     .clip(btnShape)
-                                    .background(Color.White.copy(alpha = 0.10f))
-                                    .border(1.dp, Color.White.copy(alpha = 0.22f), btnShape)
+                                    .background(colors.surfaceButtonSubtle)
+                                    .border(1.dp, colors.borderButton, btnShape)
                                     .padding(horizontal = 16.dp, vertical = 9.dp),
                             ) {
                                 Text(
                                     text = stringResource(R.string.action_back),
-                                    color = Color.White.copy(alpha = 0.85f),
+                                    color = colors.textMuted,
                                     style = MaterialTheme.typography.labelLarge.copy(
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Medium,
@@ -2186,13 +2675,13 @@ private fun AddInstanceDialogContent(
                                         },
                                     )
                                     .clip(btnShape)
-                                    .background(Color.White.copy(alpha = 0.24f))
-                                    .border(1.dp, Color.White.copy(alpha = 0.42f), btnShape)
+                                    .background(colors.surfaceButtonSelected)
+                                    .border(1.dp, colors.borderSelectedCard, btnShape)
                                     .padding(horizontal = 16.dp, vertical = 9.dp),
                             ) {
                                 Text(
                                     text = stringResource(R.string.action_install),
-                                    color = Color(0xFFFFDF8E),
+                                    color = colors.accent,
                                     style = MaterialTheme.typography.labelLarge.copy(
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Bold,
@@ -2203,6 +2692,87 @@ private fun AddInstanceDialogContent(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * Shared selectable version list row used by both Minecraft version and loader version pickers.
+ */
+@Composable
+private fun VersionSelectionRow(
+    label: String,
+    releaseDate: String,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    leadingIcon: @Composable (tint: Color) -> Unit,
+) {
+    val colors = LauncherTheme.colors
+    val rowShape = RoundedCornerShape(14.dp)
+    val rowBg by animateColorAsState(
+        targetValue = if (isSelected) colors.surfaceCardSelected else colors.surfaceCard,
+        animationSpec = tween(180),
+        label = "versionRowBg",
+    )
+    val rowBorder by animateColorAsState(
+        targetValue = if (isSelected) colors.borderSelectedCard else colors.borderSubtle,
+        animationSpec = tween(180),
+        label = "versionRowBorder",
+    )
+    val rowTextColor by animateColorAsState(
+        targetValue = if (isSelected) colors.accent else colors.textPrimary,
+        animationSpec = tween(180),
+        label = "versionRowText",
+    )
+    val dateTextColor by animateColorAsState(
+        targetValue = if (isSelected) colors.accent else colors.textSubtle,
+        animationSpec = tween(180),
+        label = "versionDateText",
+    )
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .smoothPressClickable(
+                pressScale = 0.97f,
+                onClick = onClick,
+            )
+            .clip(rowShape)
+            .background(rowBg)
+            .border(1.dp, rowBorder, rowShape)
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            leadingIcon(rowTextColor)
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                text = label,
+                color = rowTextColor,
+                style = MaterialTheme.typography.bodyLarge.copy(
+                    fontSize = 14.sp,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                ),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+
+        if (releaseDate.isNotEmpty()) {
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                text = releaseDate,
+                color = dateTextColor,
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                ),
+                maxLines = 1,
+            )
         }
     }
 }
@@ -2223,7 +2793,11 @@ fun ProgressBar(
     backgroundConfig: BackgroundConfig,
     sharedTimeSeconds: Float,
     modifier: Modifier = Modifier,
+    onCancelTask: () -> Unit = {},
     sceneGraphicsLayer: GraphicsLayer? = null,
+    blurredBackdropLayer: GraphicsLayer? = null,
+    backdropRegionLeftPx: Float = 0f,
+    backdropRegionTopPx: Float = 0f,
     topInset: Dp = 6.dp,
 ) {
     val rawProgress = (snapshot?.progress ?: 0f).coerceIn(0f, 1f)
@@ -2236,6 +2810,10 @@ fun ProgressBar(
     val isComplete = snapshot?.isComplete == true || rawProgress >= 0.999f
     val hasError = snapshot?.errorMessage != null
 
+    val expandedHeight = minOf(
+        PROGRESS_BAR_EXPANDED_HEIGHT,
+        (screenHeight - 16.dp).coerceAtLeast(180.dp),
+    )
     val morphSpec = spring<Dp>(
         dampingRatio = 0.78f,
         stiffness = 360f,
@@ -2246,7 +2824,7 @@ fun ProgressBar(
         label = "islandWidth",
     )
     val islandHeight by animateDpAsState(
-        targetValue = if (expanded) 224.dp else 38.dp,
+        targetValue = if (expanded) expandedHeight else 38.dp,
         animationSpec = morphSpec,
         label = "islandHeight",
     )
@@ -2271,7 +2849,13 @@ fun ProgressBar(
         else -> stringResource(R.string.installing_instance_format, task.instanceName)
     }
 
-    val accentColor = if (hasError) Color(0xFFFF7A7E) else Color(0xFFFFDF8E)
+    val colors = LauncherTheme.colors
+    val statusAccentColor = if (hasError) colors.error else colors.accent
+    val progressGradient = if (hasError) {
+        listOf(colors.errorStrong, colors.error)
+    } else {
+        listOf(colors.accentSecondary, colors.accent)
+    }
 
     Box(
         modifier = modifier
@@ -2283,54 +2867,76 @@ fun ProgressBar(
             )
             .clip(islandShape),
     ) {
-        // 1. Real-time Gaussian Blurred Backdrop Layer (blurs the live underlying panels:
-        // Instances, Account, Settings, RightPlayAndSkinPanel, and LauncherBackground)
+        // 1. Real-time Gaussian Blurred Backdrop Layer (draws the synchronously blurred
+        // top-center capture of live underlying panels: Account, Instances, Settings, etc.)
+        if (blurredBackdropLayer != null) {
+            Canvas(modifier = Modifier.matchParentSize()) {
+                val pillLeftPx = (screenWidth.toPx() - size.width) * 0.5f
+                val pillTopPx = topInset.toPx()
+                translate(
+                    left = backdropRegionLeftPx - pillLeftPx,
+                    top = backdropRegionTopPx - pillTopPx,
+                ) {
+                    drawLayer(blurredBackdropLayer)
+                }
+            }
+        } else {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .layout { measurable, constraints ->
+                        val wPx = screenWidth.roundToPx().coerceAtLeast(constraints.maxWidth)
+                        val hPx = screenHeight.roundToPx().coerceAtLeast(constraints.maxHeight)
+                        val offsetX = -((wPx - constraints.maxWidth) / 2)
+                        val offsetY = -topInset.roundToPx()
+                        val placeable = measurable.measure(Constraints.fixed(wPx, hPx))
+                        layout(constraints.maxWidth, constraints.maxHeight) {
+                            placeable.place(offsetX, offsetY)
+                        }
+                    }
+                    .blur(
+                        radius = 10.dp,
+                        edgeTreatment = BlurredEdgeTreatment.Rectangle,
+                    ),
+            ) {
+                LauncherBackground(
+                    modifier = Modifier.fillMaxSize(),
+                    config = backgroundConfig,
+                    sharedTimeSeconds = sharedTimeSeconds,
+                )
+
+                if (sceneGraphicsLayer != null) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .drawWithContent {
+                                drawLayer(sceneGraphicsLayer)
+                            },
+                    )
+                }
+            }
+        }
+
+        // Frosted glass tint kept outside BlurEffect so underlying panel cards stay legible;
+        // stronger fallback opacity on API < 31 where RenderEffect blur is unavailable.
+        val glassTintBrush = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            Brush.verticalGradient(
+                0.0f to colors.progressBackdropTop,
+                0.5f to colors.progressBackdropMid,
+                1.0f to colors.progressBackdropBottom,
+            )
+        } else {
+            Brush.verticalGradient(
+                0.0f to colors.progressBackdropLegacyTop,
+                0.5f to colors.progressBackdropLegacyMid,
+                1.0f to colors.progressBackdropLegacyBottom,
+            )
+        }
         Box(
             modifier = Modifier
                 .matchParentSize()
-                .layout { measurable, constraints ->
-                    val wPx = screenWidth.roundToPx().coerceAtLeast(constraints.maxWidth)
-                    val hPx = screenHeight.roundToPx().coerceAtLeast(constraints.maxHeight)
-                    val offsetX = -((wPx - constraints.maxWidth) / 2)
-                    val offsetY = -topInset.roundToPx()
-                    val placeable = measurable.measure(Constraints.fixed(wPx, hPx))
-                    layout(constraints.maxWidth, constraints.maxHeight) {
-                        placeable.place(offsetX, offsetY)
-                    }
-                }
-                .blur(
-                    radius = 20.dp,
-                    edgeTreatment = BlurredEdgeTreatment.Rectangle,
-                ),
-        ) {
-            LauncherBackground(
-                modifier = Modifier.fillMaxSize(),
-                config = backgroundConfig,
-                sharedTimeSeconds = sharedTimeSeconds,
-            )
-
-            if (sceneGraphicsLayer != null) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .drawWithContent {
-                            drawLayer(sceneGraphicsLayer)
-                        },
-                )
-            }
-
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.verticalGradient(
-                            0.0f to Color(0x460A1224),
-                            0.5f to Color(0x3A0F1B33),
-                            1.0f to Color(0x52070D1A),
-                        ),
-                    ),
-            )
-        }
+                .background(glassTintBrush),
+        )
 
         // 2. Frosted glass outer border
         Box(
@@ -2339,9 +2945,9 @@ fun ProgressBar(
                 .border(
                     width = 1.dp,
                     brush = Brush.verticalGradient(
-                        0.0f to accentColor.copy(alpha = 0.48f),
-                        0.5f to Color.White.copy(alpha = 0.22f),
-                        1.0f to Color.White.copy(alpha = 0.30f),
+                        0.0f to statusAccentColor.copy(alpha = 0.48f),
+                        0.5f to colors.borderButton,
+                        1.0f to colors.white.copy(alpha = 0.30f),
                     ),
                     shape = islandShape,
                 ),
@@ -2366,16 +2972,16 @@ fun ProgressBar(
                         modifier = Modifier.weight(1f),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(
-                            painter = painterResource(id = task.loaderType.iconRes),
+                        InstanceLoaderIcon(
+                            loaderType = task.loaderType,
                             contentDescription = statusTitle,
-                            tint = accentColor,
+                            defaultTint = statusAccentColor,
                             modifier = Modifier.size(16.dp),
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = statusTitle,
-                            color = if (hasError) Color(0xFFFFB2B4) else Color.White,
+                            color = if (hasError) colors.errorText else colors.textPrimary,
                             style = MaterialTheme.typography.labelMedium.copy(
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold,
@@ -2396,27 +3002,19 @@ fun ProgressBar(
                                 .width(44.dp)
                                 .height(5.dp)
                                 .clip(RoundedCornerShape(3.dp))
-                                .background(Color.White.copy(alpha = 0.16f)),
+                                .background(colors.surfaceBadge),
                         ) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxHeight()
                                     .fillMaxWidth(animatedProgress)
                                     .clip(RoundedCornerShape(3.dp))
-                                    .background(
-                                        Brush.horizontalGradient(
-                                            if (hasError) {
-                                                listOf(Color(0xFFE5484D), Color(0xFFFF7A7E))
-                                            } else {
-                                                listOf(Color(0xFFFFB84D), Color(0xFFFFDF8E))
-                                            },
-                                        ),
-                                    ),
+                                    .background(Brush.horizontalGradient(progressGradient)),
                             )
                         }
                         Text(
                             text = stringResource(R.string.percent_format, percentInt),
-                            color = accentColor,
+                            color = statusAccentColor,
                             style = MaterialTheme.typography.labelSmall.copy(
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
@@ -2442,16 +3040,16 @@ fun ProgressBar(
                             modifier = Modifier.weight(1f),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Icon(
-                                painter = painterResource(id = task.loaderType.iconRes),
+                            InstanceLoaderIcon(
+                                loaderType = task.loaderType,
                                 contentDescription = statusTitle,
-                                tint = accentColor,
+                                defaultTint = statusAccentColor,
                                 modifier = Modifier.size(18.dp),
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = statusTitle,
-                                color = if (hasError) Color(0xFFFFB2B4) else Color.White,
+                                color = if (hasError) colors.errorText else colors.textPrimary,
                                 style = MaterialTheme.typography.titleSmall.copy(
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.Bold,
@@ -2462,7 +3060,7 @@ fun ProgressBar(
                         }
                         Text(
                             text = stringResource(R.string.percent_format, percentInt),
-                            color = accentColor,
+                            color = statusAccentColor,
                             style = MaterialTheme.typography.titleSmall.copy(
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.ExtraBold,
@@ -2476,22 +3074,14 @@ fun ProgressBar(
                             .fillMaxWidth()
                             .height(6.dp)
                             .clip(RoundedCornerShape(3.dp))
-                            .background(Color.White.copy(alpha = 0.15f)),
+                            .background(colors.white.copy(alpha = 0.15f)),
                     ) {
                         Box(
                             modifier = Modifier
                                 .fillMaxHeight()
                                 .fillMaxWidth(animatedProgress)
                                 .clip(RoundedCornerShape(3.dp))
-                                .background(
-                                    Brush.horizontalGradient(
-                                        if (hasError) {
-                                            listOf(Color(0xFFE5484D), Color(0xFFFF7A7E))
-                                        } else {
-                                            listOf(Color(0xFFFFB84D), Color(0xFFFFDF8E))
-                                        },
-                                    ),
-                                ),
+                                .background(Brush.horizontalGradient(progressGradient)),
                         )
                     }
 
@@ -2503,7 +3093,7 @@ fun ProgressBar(
                     ) {
                         Text(
                             text = stringResource(R.string.downloading_item_format, currentFileName),
-                            color = Color.White.copy(alpha = 0.86f),
+                            color = colors.textBody,
                             style = MaterialTheme.typography.labelSmall.copy(
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Medium,
@@ -2520,7 +3110,7 @@ fun ProgressBar(
                                 String.format(Locale.US, "%.1f", totalMb),
                                 String.format(Locale.US, "%.1f", speedMbPerSec),
                             ),
-                            color = accentColor.copy(alpha = 0.90f),
+                            color = statusAccentColor.copy(alpha = 0.90f),
                             style = MaterialTheme.typography.labelSmall.copy(
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.SemiBold,
@@ -2548,9 +3138,9 @@ fun ProgressBar(
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(
                                         when {
-                                            itemError -> Color(0xFFE5484D).copy(alpha = 0.16f)
-                                            itemActive -> Color.White.copy(alpha = 0.14f)
-                                            else -> Color.White.copy(alpha = 0.05f)
+                                            itemError -> colors.errorSubtleContainer
+                                            itemActive -> colors.surfaceButton
+                                            else -> colors.surfaceCardMuted
                                         },
                                     )
                                     .padding(horizontal = 8.dp, vertical = 5.dp),
@@ -2560,10 +3150,10 @@ fun ProgressBar(
                                 Text(
                                     text = item.fileName,
                                     color = when {
-                                        itemError -> Color(0xFFFFB2B4)
-                                        itemActive -> Color(0xFFFFDF8E)
-                                        itemDone -> Color.White.copy(alpha = 0.85f)
-                                        else -> Color.White.copy(alpha = 0.45f)
+                                        itemError -> colors.errorText
+                                        itemActive -> colors.accent
+                                        itemDone -> colors.textMuted
+                                        else -> colors.white.copy(alpha = 0.45f)
                                     },
                                     style = MaterialTheme.typography.labelSmall.copy(
                                         fontSize = 11.sp,
@@ -2582,10 +3172,10 @@ fun ProgressBar(
                                         else -> stringResource(R.string.download_status_waiting)
                                     },
                                     color = when {
-                                        itemError -> Color(0xFFFF7A7E)
-                                        itemDone -> Color(0xFF7EE2A8)
-                                        itemActive -> Color(0xFFFFDF8E)
-                                        else -> Color.White.copy(alpha = 0.42f)
+                                        itemError -> colors.error
+                                        itemDone -> colors.success
+                                        itemActive -> colors.accent
+                                        else -> colors.textDisabled
                                     },
                                     style = MaterialTheme.typography.labelSmall.copy(
                                         fontSize = 10.sp,
@@ -2595,10 +3185,134 @@ fun ProgressBar(
                             }
                         }
                     }
+
+                    // Bottom action: Cancel active download / preparation (or dismiss error)
+                    val canCancelTask = !isComplete || hasError
+                    val cancelShape = RoundedCornerShape(10.dp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .smoothPressClickable(
+                                    enabled = canCancelTask,
+                                    pressScale = 0.94f,
+                                    onClick = onCancelTask,
+                                )
+                                .clip(cancelShape)
+                                .background(
+                                    if (canCancelTask) colors.errorCancelContainer else colors.surfaceButtonDisabled,
+                                )
+                                .border(
+                                    width = 1.dp,
+                                    color = if (canCancelTask) colors.errorBorder else colors.borderSubtle,
+                                    shape = cancelShape,
+                                )
+                                .padding(horizontal = 14.dp, vertical = 6.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = stringResource(R.string.action_cancel),
+                                color = if (canCancelTask) colors.errorText else colors.textActionDisabled,
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                ),
+                            )
+                        }
+                    }
                 }
             }
         }
     }
+}
+
+/**
+ * Shared frosted glass backdrop surface used identically across [UnifiedLeftRailAndPanel] and
+ * [RightPlayAndSkinPanel] (Change button, Version panel, and Play button). Draws the single
+ * shared fullscreen [blurredBackgroundLayer] translated into this panel's root coordinates so
+ * animations, GIFs, and Video backgrounds stay 100% blurred and in sync without spawning duplicate
+ * media decoders.
+ */
+@Composable
+private fun BoxScope.FrostedGlassBackdrop(
+    blurredBackgroundLayer: GraphicsLayer?,
+    backgroundRootOffset: Offset,
+    backgroundFrameTick: () -> Int,
+    sharedTimeSeconds: Float,
+    backgroundConfig: BackgroundConfig,
+    screenWidth: Dp,
+    screenHeight: Dp,
+    fallbackOffsetX: (Int) -> Int,
+    fallbackOffsetY: (Int) -> Int,
+) {
+    val colors = LauncherTheme.colors
+    val supportsBlur = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    var panelRootOffset by remember { mutableStateOf(Offset.Zero) }
+
+    if (blurredBackgroundLayer != null) {
+        Canvas(
+            modifier = Modifier
+                .matchParentSize()
+                .clipToBounds()
+                .onGloballyPositioned { coords ->
+                    if (coords.isAttached) {
+                        val pos = coords.positionInRoot()
+                        if (pos != panelRootOffset) {
+                            panelRootOffset = pos
+                        }
+                    }
+                },
+        ) {
+            @Suppress("UNUSED_EXPRESSION")
+            sharedTimeSeconds
+            @Suppress("UNUSED_EXPRESSION")
+            backgroundFrameTick()
+            translate(
+                left = backgroundRootOffset.x - panelRootOffset.x,
+                top = backgroundRootOffset.y - panelRootOffset.y,
+            ) {
+                drawLayer(blurredBackgroundLayer)
+            }
+        }
+    } else {
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .layout { measurable, constraints ->
+                    val wPx = screenWidth.roundToPx().coerceAtLeast(constraints.maxWidth)
+                    val hPx = screenHeight.roundToPx().coerceAtLeast(constraints.maxHeight)
+                    val offsetX = fallbackOffsetX(constraints.maxWidth)
+                    val offsetY = fallbackOffsetY(constraints.maxHeight)
+                    val placeable = measurable.measure(Constraints.fixed(wPx, hPx))
+                    layout(constraints.maxWidth, constraints.maxHeight) {
+                        placeable.place(offsetX, offsetY)
+                    }
+                }
+                .blur(
+                    radius = 20.dp,
+                    edgeTreatment = BlurredEdgeTreatment.Rectangle,
+                ),
+        ) {
+            LauncherBackground(
+                modifier = Modifier.fillMaxSize(),
+                config = backgroundConfig,
+                sharedTimeSeconds = sharedTimeSeconds,
+            )
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .matchParentSize()
+            .background(
+                Brush.verticalGradient(
+                    *colors.glassBackdropStopsFor(supportsBlur = supportsBlur).toTypedArray(),
+                ),
+            ),
+    )
 }
 
 /**
@@ -2621,21 +3335,23 @@ fun UnifiedLeftRailAndPanel(
     onAddAccountClick: () -> Unit,
     onRequestRenameAccount: (LauncherAccount) -> Unit,
     onRemoveAccount: (LauncherAccount) -> Unit,
-    selectedRenderer: RendererType,
-    rendererInstallStates: Map<RendererType, Boolean>,
-    installedRuntimes: Map<JavaRuntimeVersion, InstalledJavaRuntime?>,
-    engineStatus: GameEngineStatus,
-    engineLogs: List<String>,
-    onRendererSelect: (RendererType) -> Unit,
-    onDownloadRenderer: (RendererType) -> Unit,
-    onDownloadRuntime: (JavaRuntimeVersion) -> Unit,
-    onStopGame: () -> Unit,
+    accentColor: Color,
+    isImportingBackground: Boolean,
+    backgroundImportError: String?,
+    onPickBackgroundMedia: () -> Unit,
+    onResetBackground: () -> Unit,
+    onAccentColorChange: (Color) -> Unit,
+    onOpenAccentColorPicker: () -> Unit,
     screenWidth: Dp,
     screenHeight: Dp,
     backgroundConfig: BackgroundConfig,
     sharedTimeSeconds: Float,
     modifier: Modifier = Modifier,
+    blurredBackgroundLayer: GraphicsLayer? = null,
+    backgroundRootOffset: Offset = Offset.Zero,
+    backgroundFrameTick: () -> Int = { 0 },
 ) {
+    val colors = LauncherTheme.colors
     val outerMargin = 5.dp
     val railWidth = 84.dp
     val unifiedShape = RoundedCornerShape(20.dp)
@@ -2653,46 +3369,19 @@ fun UnifiedLeftRailAndPanel(
             .fillMaxHeight()
             .clip(unifiedShape),
     ) {
-        // 1. Real-time Gaussian Blurred Backdrop Layer shared across the entire unified Box.
-        // Measured at constant full-screen size (wPx x hPx) and placed at (-outerMargin, -outerMargin)
-        // so the GPU blur buffer never reallocates or shifts while AnimatedVisibility expands/shrinks!
-        Box(
-            modifier = Modifier
-                .matchParentSize()
-                .layout { measurable, constraints ->
-                    val wPx = screenWidth.roundToPx().coerceAtLeast(constraints.maxWidth)
-                    val hPx = screenHeight.roundToPx().coerceAtLeast(constraints.maxHeight)
-                    val offsetX = -outerMargin.roundToPx()
-                    val offsetY = -outerMargin.roundToPx()
-                    val placeable = measurable.measure(Constraints.fixed(wPx, hPx))
-                    layout(constraints.maxWidth, constraints.maxHeight) {
-                        placeable.place(offsetX, offsetY)
-                    }
-                }
-                .blur(
-                    radius = 20.dp,
-                    edgeTreatment = BlurredEdgeTreatment.Rectangle,
-                ),
-        ) {
-            LauncherBackground(
-                modifier = Modifier.fillMaxSize(),
-                config = backgroundConfig,
-                sharedTimeSeconds = sharedTimeSeconds,
-            )
-
-            // Subtle frosted glass translucent tint overlay inside the blurred layer
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.verticalGradient(
-                            0.0f to Color(0x380A1224),
-                            0.5f to Color(0x2E0F1B33),
-                            1.0f to Color(0x44070D1A),
-                        ),
-                    ),
-            )
-        }
+        // 1. Real-time Gaussian Blurred Backdrop Layer shared across all panels
+        val outerMarginPx = with(LocalDensity.current) { outerMargin.roundToPx() }
+        FrostedGlassBackdrop(
+            blurredBackgroundLayer = blurredBackgroundLayer,
+            backgroundRootOffset = backgroundRootOffset,
+            backgroundFrameTick = backgroundFrameTick,
+            sharedTimeSeconds = sharedTimeSeconds,
+            backgroundConfig = backgroundConfig,
+            screenWidth = screenWidth,
+            screenHeight = screenHeight,
+            fallbackOffsetX = { -outerMarginPx },
+            fallbackOffsetY = { -outerMarginPx },
+        )
 
         // 2. Unified frosted glass outer border around the combined Rail + Panel box
         Box(
@@ -2701,9 +3390,7 @@ fun UnifiedLeftRailAndPanel(
                 .border(
                     width = 1.dp,
                     brush = Brush.verticalGradient(
-                        0.0f to Color.White.copy(alpha = 0.28f),
-                        0.5f to Color.White.copy(alpha = 0.14f),
-                        1.0f to Color.White.copy(alpha = 0.22f),
+                        *colors.railBorderStops.toTypedArray(),
                     ),
                     shape = unifiedShape,
                 ),
@@ -2768,9 +3455,7 @@ fun UnifiedLeftRailAndPanel(
                             .fillMaxHeight()
                             .background(
                                 Brush.verticalGradient(
-                                    0.0f to Color.White.copy(alpha = 0.18f),
-                                    0.5f to Color.White.copy(alpha = 0.34f),
-                                    1.0f to Color.White.copy(alpha = 0.18f),
+                                    *colors.railDividerStops.toTypedArray(),
                                 ),
                             ),
                     )
@@ -2825,15 +3510,14 @@ fun UnifiedLeftRailAndPanel(
                                     onRemoveAccount = onRemoveAccount,
                                 )
                                 LauncherDestination.SETTINGS -> SettingsPanelContent(
-                                    selectedRenderer = selectedRenderer,
-                                    rendererInstallStates = rendererInstallStates,
-                                    installedRuntimes = installedRuntimes,
-                                    engineStatus = engineStatus,
-                                    engineLogs = engineLogs,
-                                    onRendererSelect = onRendererSelect,
-                                    onDownloadRenderer = onDownloadRenderer,
-                                    onDownloadRuntime = onDownloadRuntime,
-                                    onStopGame = onStopGame,
+                                    backgroundConfig = backgroundConfig,
+                                    accentColor = accentColor,
+                                    isImportingBackground = isImportingBackground,
+                                    backgroundImportError = backgroundImportError,
+                                    onPickBackgroundMedia = onPickBackgroundMedia,
+                                    onResetBackground = onResetBackground,
+                                    onAccentColorChange = onAccentColorChange,
+                                    onOpenAccentColorPicker = onOpenAccentColorPicker,
                                 )
                             }
                         }
@@ -2845,6 +3529,23 @@ fun UnifiedLeftRailAndPanel(
 }
 
 @Composable
+private fun PanelHeaderDivider(
+    modifier: Modifier = Modifier,
+) {
+    val colors = LauncherTheme.colors
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(1.dp)
+            .background(
+                Brush.horizontalGradient(
+                    *colors.railDividerStops.toTypedArray(),
+                ),
+            ),
+    )
+}
+
+@Composable
 private fun InstancesPanelContent(
     instances: List<LauncherInstance>,
     selectedInstanceId: String,
@@ -2852,12 +3553,13 @@ private fun InstancesPanelContent(
     onAddInstanceClick: () -> Unit,
     onRemoveInstance: (LauncherInstance) -> Unit,
 ) {
+    val colors = LauncherTheme.colors
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp),
         horizontalAlignment = Alignment.Start,
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         // Top-Left "Add Instance" Button
         val addBtnShape = RoundedCornerShape(14.dp)
@@ -2869,8 +3571,8 @@ private fun InstancesPanelContent(
                     onClick = onAddInstanceClick,
                 )
                 .clip(addBtnShape)
-                .background(Color.White.copy(alpha = 0.14f))
-                .border(1.dp, Color.White.copy(alpha = 0.32f), addBtnShape)
+                .background(colors.surfaceButton)
+                .border(1.dp, colors.borderButtonStrong, addBtnShape)
                 .padding(horizontal = 16.dp, vertical = 11.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Start,
@@ -2878,13 +3580,13 @@ private fun InstancesPanelContent(
             Icon(
                 painter = painterResource(id = R.drawable.ic_add),
                 contentDescription = addInstanceText,
-                tint = Color.White,
+                tint = colors.iconPrimary,
                 modifier = Modifier.size(20.dp),
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
                 text = addInstanceText,
-                color = Color.White,
+                color = colors.textPrimary,
                 style = MaterialTheme.typography.labelLarge.copy(
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
@@ -2892,16 +3594,14 @@ private fun InstancesPanelContent(
             )
         }
 
+        PanelHeaderDivider()
+
         // Instances List below "Add Instance" button
         if (instances.isEmpty()) {
-            val emptyShape = RoundedCornerShape(14.dp)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .clip(emptyShape)
-                    .background(Color.White.copy(alpha = 0.06f))
-                    .border(1.dp, Color.White.copy(alpha = 0.14f), emptyShape)
                     .padding(20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
@@ -2909,23 +3609,17 @@ private fun InstancesPanelContent(
                 Icon(
                     painter = painterResource(id = R.drawable.ic_instances),
                     contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.55f),
+                    tint = colors.iconMuted,
                     modifier = Modifier.size(32.dp),
                 )
                 Spacer(modifier = Modifier.height(10.dp))
                 Text(
                     text = stringResource(R.string.no_instances_installed),
-                    color = Color.White.copy(alpha = 0.90f),
+                    color = colors.textSecondary,
                     style = MaterialTheme.typography.titleSmall.copy(
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
                     ),
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = stringResource(R.string.no_instances_hint),
-                    color = Color.White.copy(alpha = 0.60f),
-                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
                 )
             }
         } else {
@@ -2953,17 +3647,17 @@ private fun InstancesPanelContent(
                         }
                         val itemShape = RoundedCornerShape(14.dp)
                         val itemBg by animateColorAsState(
-                            targetValue = if (isSelected) Color.White.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.08f),
+                            targetValue = if (isSelected) colors.surfaceCardSelected else colors.surfaceCard,
                             animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
                             label = "panelInstanceItemBg",
                         )
                         val itemBorder by animateColorAsState(
-                            targetValue = if (isSelected) Color.White.copy(alpha = 0.42f) else Color.White.copy(alpha = 0.14f),
+                            targetValue = if (isSelected) colors.borderSelectedCard else colors.borderSubtle,
                             animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
                             label = "panelInstanceItemBorder",
                         )
                         val titleColor by animateColorAsState(
-                            targetValue = if (isSelected) Color(0xFFFFDF8E) else Color.White,
+                            targetValue = if (isSelected) colors.accent else colors.textPrimary,
                             animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
                             label = "panelInstanceTitleColor",
                         )
@@ -2986,10 +3680,10 @@ private fun InstancesPanelContent(
                                 modifier = Modifier.weight(1f),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Icon(
-                                    painter = painterResource(id = instance.iconRes),
+                                InstanceLoaderIcon(
+                                    loaderType = instance.loaderType,
                                     contentDescription = instanceName,
-                                    tint = titleColor,
+                                    defaultTint = titleColor,
                                     modifier = Modifier.size(22.dp),
                                 )
                                 Spacer(modifier = Modifier.width(12.dp))
@@ -3006,7 +3700,7 @@ private fun InstancesPanelContent(
                                     )
                                     Text(
                                         text = subtitle,
-                                        color = Color.White.copy(alpha = 0.60f),
+                                        color = colors.white.copy(alpha = 0.60f),
                                         style = MaterialTheme.typography.labelSmall.copy(
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Medium,
@@ -3027,14 +3721,14 @@ private fun InstancesPanelContent(
                                         onClick = { onRemoveInstance(instance) },
                                     )
                                     .clip(removeShape)
-                                    .background(Color(0xFFE5484D).copy(alpha = 0.22f))
-                                    .border(1.dp, Color(0xFFFF7A7E).copy(alpha = 0.40f), removeShape)
+                                    .background(colors.errorContainer)
+                                    .border(1.dp, colors.errorBorderStrong, removeShape)
                                     .padding(horizontal = 10.dp, vertical = 5.dp),
                                 contentAlignment = Alignment.Center,
                             ) {
                                 Text(
                                     text = stringResource(R.string.action_remove),
-                                    color = Color(0xFFFFB2B4),
+                                    color = colors.errorText,
                                     style = MaterialTheme.typography.labelMedium.copy(
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.SemiBold,
@@ -3081,6 +3775,7 @@ private fun AccountPanelContent(
     onRequestRenameAccount: (LauncherAccount) -> Unit,
     onRemoveAccount: (LauncherAccount) -> Unit,
 ) {
+    val colors = LauncherTheme.colors
     val context = LocalContext.current
     val skin = remember {
         runCatching { SkinUtils.fromAsset(context, SKIN_ASSET) }
@@ -3119,7 +3814,7 @@ private fun AccountPanelContent(
             initialYaw = -20f,
             initialPitch = 6f,
             initialZoom = 1.15f,
-            backgroundColor = 0x00000000,
+            backgroundColor = LauncherColorTokens.TransparentArgb,
             transparentBackground = true,
             nameTag = previewUsername,
             nameTagScale = 1.15f,
@@ -3152,7 +3847,7 @@ private fun AccountPanelContent(
                     .weight(1f)
                     .fillMaxHeight(),
                 horizontalAlignment = Alignment.Start,
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 // Top-Left "Add Account" Button
                 val addBtnShape = RoundedCornerShape(14.dp)
@@ -3167,8 +3862,8 @@ private fun AccountPanelContent(
                             },
                         )
                         .clip(addBtnShape)
-                        .background(Color.White.copy(alpha = 0.14f))
-                        .border(1.dp, Color.White.copy(alpha = 0.32f), addBtnShape)
+                        .background(colors.surfaceButton)
+                        .border(1.dp, colors.borderButtonStrong, addBtnShape)
                         .padding(horizontal = 16.dp, vertical = 11.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.Start,
@@ -3176,19 +3871,21 @@ private fun AccountPanelContent(
                     Icon(
                         painter = painterResource(id = R.drawable.ic_add),
                         contentDescription = addAccountText,
-                        tint = Color.White,
+                        tint = colors.iconPrimary,
                         modifier = Modifier.size(20.dp),
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = addAccountText,
-                        color = Color.White,
+                        color = colors.textPrimary,
                         style = MaterialTheme.typography.labelLarge.copy(
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
                         ),
                     )
                 }
+
+                PanelHeaderDivider()
 
                 // Account List: [{profileskinhead} {username}     {•••}]
                 Column(
@@ -3210,22 +3907,22 @@ private fun AccountPanelContent(
                             val isMenuOpen = openOptionsAccountId == account.id
                             val itemShape = RoundedCornerShape(14.dp)
                             val itemBg by animateColorAsState(
-                                targetValue = if (isSelected) Color.White.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.08f),
+                                targetValue = if (isSelected) colors.surfaceCardSelected else colors.surfaceCard,
                                 animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
                                 label = "accountItemBg",
                             )
                             val itemBorder by animateColorAsState(
-                                targetValue = if (isSelected) Color.White.copy(alpha = 0.42f) else Color.White.copy(alpha = 0.14f),
+                                targetValue = if (isSelected) colors.borderSelectedCard else colors.borderSubtle,
                                 animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
                                 label = "accountItemBorder",
                             )
                             val titleColor by animateColorAsState(
-                                targetValue = if (isSelected) Color(0xFFFFDF8E) else Color.White,
+                                targetValue = if (isSelected) colors.accent else colors.textPrimary,
                                 animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
                                 label = "accountTitleColor",
                             )
                             val moreBtnBg by animateColorAsState(
-                                targetValue = if (isMenuOpen) Color.White.copy(alpha = 0.22f) else Color.Transparent,
+                                targetValue = if (isMenuOpen) colors.surfaceCardSelected else colors.transparent,
                                 animationSpec = tween(durationMillis = 180),
                                 label = "moreBtnBg",
                             )
@@ -3274,7 +3971,7 @@ private fun AccountPanelContent(
                                                 .clip(RoundedCornerShape(6.dp))
                                                 .border(
                                                     width = 1.dp,
-                                                    color = Color.White.copy(alpha = 0.28f),
+                                                    color = colors.borderModal,
                                                     shape = RoundedCornerShape(6.dp),
                                                 ),
                                         )
@@ -3330,14 +4027,14 @@ private fun AccountPanelContent(
                                                             },
                                                         )
                                                         .clip(actionShape)
-                                                        .background(Color.White.copy(alpha = 0.16f))
-                                                        .border(1.dp, Color.White.copy(alpha = 0.30f), actionShape)
+                                                        .background(colors.surfaceBadge)
+                                                        .border(1.dp, colors.white.copy(alpha = 0.30f), actionShape)
                                                         .padding(horizontal = 10.dp, vertical = 6.dp),
                                                     contentAlignment = Alignment.Center,
                                                 ) {
                                                     Text(
                                                         text = stringResource(R.string.action_rename),
-                                                        color = Color.White,
+                                                        color = colors.textPrimary,
                                                         style = MaterialTheme.typography.labelMedium.copy(
                                                             fontSize = 12.sp,
                                                             fontWeight = FontWeight.SemiBold,
@@ -3356,14 +4053,14 @@ private fun AccountPanelContent(
                                                             },
                                                         )
                                                         .clip(actionShape)
-                                                        .background(Color(0xFFE5484D).copy(alpha = 0.25f))
-                                                        .border(1.dp, Color(0xFFFF7A7E).copy(alpha = 0.45f), actionShape)
+                                                        .background(colors.errorCancelContainer)
+                                                        .border(1.dp, colors.errorBorder, actionShape)
                                                         .padding(horizontal = 10.dp, vertical = 6.dp),
                                                     contentAlignment = Alignment.Center,
                                                 ) {
                                                     Text(
                                                         text = stringResource(R.string.action_remove),
-                                                        color = Color(0xFFFFB2B4),
+                                                        color = colors.errorText,
                                                         style = MaterialTheme.typography.labelMedium.copy(
                                                             fontSize = 12.sp,
                                                             fontWeight = FontWeight.SemiBold,
@@ -3391,7 +4088,7 @@ private fun AccountPanelContent(
                                             Icon(
                                                 painter = painterResource(id = R.drawable.ic_more_horiz),
                                                 contentDescription = stringResource(R.string.action_more_options),
-                                                tint = Color.White.copy(alpha = 0.9f),
+                                                tint = colors.textSecondary,
                                                 modifier = Modifier
                                                     .size(20.dp)
                                                     .graphicsLayer { rotationZ = moreBtnRotation },
@@ -3413,10 +4110,13 @@ private fun AccountPanelContent(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Top,
             ) {
+                val skinBoxShape = RoundedCornerShape(16.dp)
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .fillMaxWidth(),
+                        .fillMaxWidth()
+                        .clip(skinBoxShape)
+                        .background(colors.surfaceCard),
                     contentAlignment = Alignment.Center,
                 ) {
                     SkinViewer(
@@ -3424,6 +4124,16 @@ private fun AccountPanelContent(
                         skin = skin,
                         cape = cape,
                         config = accountSkinConfig,
+                    )
+
+                    Box(
+                        modifier = Modifier
+                            .matchParentSize()
+                            .border(
+                                width = 1.dp,
+                                color = colors.borderDefault,
+                                shape = skinBoxShape,
+                            ),
                     )
                 }
             }
@@ -3446,7 +4156,11 @@ fun RightPlayAndSkinPanel(
     backgroundConfig: BackgroundConfig,
     sharedTimeSeconds: Float,
     modifier: Modifier = Modifier,
+    blurredBackgroundLayer: GraphicsLayer? = null,
+    backgroundRootOffset: Offset = Offset.Zero,
+    backgroundFrameTick: () -> Int = { 0 },
 ) {
+    val colors = LauncherTheme.colors
     val context = LocalContext.current
     val skin = remember {
         runCatching { SkinUtils.fromAsset(context, SKIN_ASSET) }
@@ -3472,7 +4186,7 @@ fun RightPlayAndSkinPanel(
             initialYaw = -22f,
             initialPitch = 5f,
             initialZoom = 1.28f,
-            backgroundColor = 0x00000000,
+            backgroundColor = LauncherColorTokens.TransparentArgb,
             transparentBackground = true,
             nameTag = activeUsername,
             nameTagScale = 1.15f,
@@ -3534,46 +4248,28 @@ fun RightPlayAndSkinPanel(
                 .clip(buttonShape),
             contentAlignment = Alignment.Center,
         ) {
-            // 1. Real-time Gaussian Blurred Backdrop Layer:
-            // Blurred at constant full-screen size (wPx x hPx) and positioned mathematically
-            // so the GPU blur buffer never reallocates or lags during resize!
-            Box(
-                modifier = Modifier
-                    .layout { measurable, constraints ->
-                        val wPx = screenWidth.roundToPx().coerceAtLeast(constraints.maxWidth)
-                        val hPx = screenHeight.roundToPx().coerceAtLeast(constraints.maxHeight)
-                        val rightInsetPx = (panelEndPadding + playColumnWidth + rowSpacing).roundToPx()
-                        val bottomInsetPx = changeBottomPadding.roundToPx()
-                        val offsetX = -(wPx - rightInsetPx - constraints.maxWidth)
-                        val offsetY = -(hPx - bottomInsetPx - constraints.maxHeight)
-                        val placeable = measurable.measure(Constraints.fixed(wPx, hPx))
-                        layout(constraints.maxWidth, constraints.maxHeight) {
-                            placeable.place(offsetX, offsetY)
-                        }
-                    }
-                    .blur(
-                        radius = 20.dp,
-                        edgeTreatment = BlurredEdgeTreatment.Rectangle,
-                    ),
-            ) {
-                LauncherBackground(
-                    modifier = Modifier.fillMaxSize(),
-                    config = backgroundConfig,
-                    sharedTimeSeconds = sharedTimeSeconds,
-                )
+            val density = LocalDensity.current
+            val screenWidthPx = with(density) { screenWidth.roundToPx() }
+            val screenHeightPx = with(density) { screenHeight.roundToPx() }
+            val rightInsetPx = with(density) { (panelEndPadding + playColumnWidth + rowSpacing).roundToPx() }
+            val changeBottomInsetPx = with(density) { changeBottomPadding.roundToPx() }
 
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(
-                            Brush.verticalGradient(
-                                0.0f to Color(0x380A1224),
-                                0.5f to Color(0x2E0F1B33),
-                                1.0f to Color(0x44070D1A),
-                            ),
-                        ),
-                )
-            }
+            // 1. Shared Frosted Glass Backdrop Layer (samples the single blurred fullscreen background)
+            FrostedGlassBackdrop(
+                blurredBackgroundLayer = blurredBackgroundLayer,
+                backgroundRootOffset = backgroundRootOffset,
+                backgroundFrameTick = backgroundFrameTick,
+                sharedTimeSeconds = sharedTimeSeconds,
+                backgroundConfig = backgroundConfig,
+                screenWidth = screenWidth,
+                screenHeight = screenHeight,
+                fallbackOffsetX = { maxWidth ->
+                    -(screenWidthPx.coerceAtLeast(maxWidth) - rightInsetPx - maxWidth)
+                },
+                fallbackOffsetY = { maxHeight ->
+                    -(screenHeightPx.coerceAtLeast(maxHeight) - changeBottomInsetPx - maxHeight)
+                },
+            )
 
             // 2. Frosted glass outer border
             Box(
@@ -3582,9 +4278,7 @@ fun RightPlayAndSkinPanel(
                     .border(
                         width = 1.dp,
                         brush = Brush.verticalGradient(
-                            0.0f to Color.White.copy(alpha = 0.34f),
-                            0.5f to Color.White.copy(alpha = 0.16f),
-                            1.0f to Color.White.copy(alpha = 0.26f),
+                            *colors.panelBorderStops.toTypedArray(),
                         ),
                         shape = buttonShape,
                     ),
@@ -3604,7 +4298,7 @@ fun RightPlayAndSkinPanel(
                         Icon(
                             painter = painterResource(id = R.drawable.ic_change),
                             contentDescription = stringResource(R.string.action_change_instance),
-                            tint = Color.White,
+                            tint = colors.iconPrimary,
                             modifier = Modifier.size(24.dp),
                         )
                     }
@@ -3619,13 +4313,13 @@ fun RightPlayAndSkinPanel(
                         Icon(
                             painter = painterResource(id = R.drawable.ic_instances),
                             contentDescription = null,
-                            tint = Color.White.copy(alpha = 0.55f),
+                            tint = colors.iconMuted,
                             modifier = Modifier.size(30.dp),
                         )
                         Spacer(modifier = Modifier.height(10.dp))
                         Text(
                             text = stringResource(R.string.no_instances_installed),
-                            color = Color.White.copy(alpha = 0.90f),
+                            color = colors.textSecondary,
                             style = MaterialTheme.typography.titleSmall.copy(
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold,
@@ -3640,21 +4334,21 @@ fun RightPlayAndSkinPanel(
                                     onClick = onAddInstanceClick,
                                 )
                                 .clip(addShape)
-                                .background(Color.White.copy(alpha = 0.16f))
-                                .border(1.dp, Color.White.copy(alpha = 0.34f), addShape)
+                                .background(colors.surfaceBadge)
+                                .border(1.dp, colors.borderHighlightTop, addShape)
                                 .padding(horizontal = 14.dp, vertical = 9.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Icon(
                                 painter = painterResource(id = R.drawable.ic_add),
                                 contentDescription = stringResource(R.string.add_instance),
-                                tint = Color(0xFFFFDF8E),
+                                tint = colors.accent,
                                 modifier = Modifier.size(16.dp),
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = stringResource(R.string.add_instance),
-                                color = Color(0xFFFFDF8E),
+                                color = colors.accent,
                                 style = MaterialTheme.typography.labelLarge.copy(
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
@@ -3675,17 +4369,17 @@ fun RightPlayAndSkinPanel(
                             val instanceName = instance.name
                             val itemShape = RoundedCornerShape(14.dp)
                             val itemBg by animateColorAsState(
-                                targetValue = if (isSelected) Color.White.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.08f),
+                                targetValue = if (isSelected) colors.surfaceCardSelected else colors.surfaceCard,
                                 animationSpec = tween(durationMillis = 200),
                                 label = "instanceItemBg",
                             )
                             val itemBorder by animateColorAsState(
-                                targetValue = if (isSelected) Color.White.copy(alpha = 0.42f) else Color.White.copy(alpha = 0.14f),
+                                targetValue = if (isSelected) colors.borderSelectedCard else colors.borderSubtle,
                                 animationSpec = tween(durationMillis = 200),
                                 label = "instanceItemBorder",
                             )
                             val itemContentColor by animateColorAsState(
-                                targetValue = if (isSelected) Color(0xFFFFDF8E) else Color.White.copy(alpha = 0.92f),
+                                targetValue = if (isSelected) colors.accent else colors.textStrong,
                                 animationSpec = tween(durationMillis = 200),
                                 label = "instanceItemContent",
                             )
@@ -3704,10 +4398,10 @@ fun RightPlayAndSkinPanel(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.Start,
                             ) {
-                                Icon(
-                                    painter = painterResource(id = instance.iconRes),
+                                InstanceLoaderIcon(
+                                    loaderType = instance.loaderType,
                                     contentDescription = instanceName,
-                                    tint = itemContentColor,
+                                    defaultTint = itemContentColor,
                                     modifier = Modifier.size(22.dp),
                                 )
                                 Spacer(modifier = Modifier.width(10.dp))
@@ -3764,43 +4458,28 @@ fun RightPlayAndSkinPanel(
                     .clip(buttonShape),
                 contentAlignment = Alignment.Center,
             ) {
-                // 1. Real-time Gaussian Blurred Backdrop Layer (blurred at constant full-screen size)
-                Box(
-                    modifier = Modifier
-                        .layout { measurable, constraints ->
-                            val wPx = screenWidth.roundToPx().coerceAtLeast(constraints.maxWidth)
-                            val hPx = screenHeight.roundToPx().coerceAtLeast(constraints.maxHeight)
-                            val offsetX = -(wPx - panelEndPadding.roundToPx() - constraints.maxWidth)
-                            val offsetY = -(hPx - playBottomPadding.roundToPx() - constraints.maxHeight)
-                            val placeable = measurable.measure(Constraints.fixed(wPx, hPx))
-                            layout(constraints.maxWidth, constraints.maxHeight) {
-                                placeable.place(offsetX, offsetY)
-                            }
-                        }
-                        .blur(
-                            radius = 20.dp,
-                            edgeTreatment = BlurredEdgeTreatment.Rectangle,
-                        ),
-                ) {
-                    LauncherBackground(
-                        modifier = Modifier.fillMaxSize(),
-                        config = backgroundConfig,
-                        sharedTimeSeconds = sharedTimeSeconds,
-                    )
+                val playDensity = LocalDensity.current
+                val playScreenWidthPx = with(playDensity) { screenWidth.roundToPx() }
+                val playScreenHeightPx = with(playDensity) { screenHeight.roundToPx() }
+                val playEndInsetPx = with(playDensity) { panelEndPadding.roundToPx() }
+                val playBottomInsetPx = with(playDensity) { playBottomPadding.roundToPx() }
 
-                    // Frosted glass translucent tint overlay inside the blurred layer
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(
-                                Brush.verticalGradient(
-                                    0.0f to Color(0x380A1224),
-                                    0.5f to Color(0x2E0F1B33),
-                                    1.0f to Color(0x44070D1A),
-                                ),
-                            ),
-                    )
-                }
+                // 1. Shared Frosted Glass Backdrop Layer (samples the single blurred fullscreen background)
+                FrostedGlassBackdrop(
+                    blurredBackgroundLayer = blurredBackgroundLayer,
+                    backgroundRootOffset = backgroundRootOffset,
+                    backgroundFrameTick = backgroundFrameTick,
+                    sharedTimeSeconds = sharedTimeSeconds,
+                    backgroundConfig = backgroundConfig,
+                    screenWidth = screenWidth,
+                    screenHeight = screenHeight,
+                    fallbackOffsetX = { maxWidth ->
+                        -(playScreenWidthPx.coerceAtLeast(maxWidth) - playEndInsetPx - maxWidth)
+                    },
+                    fallbackOffsetY = { maxHeight ->
+                        -(playScreenHeightPx.coerceAtLeast(maxHeight) - playBottomInsetPx - maxHeight)
+                    },
+                )
 
                 // 2. Frosted glass outer border
                 Box(
@@ -3809,9 +4488,7 @@ fun RightPlayAndSkinPanel(
                         .border(
                             width = 1.dp,
                             brush = Brush.verticalGradient(
-                                0.0f to Color.White.copy(alpha = 0.34f),
-                                0.5f to Color.White.copy(alpha = 0.16f),
-                                1.0f to Color.White.copy(alpha = 0.26f),
+                                *colors.panelBorderStops.toTypedArray(),
                             ),
                             shape = buttonShape,
                         ),
@@ -3825,7 +4502,7 @@ fun RightPlayAndSkinPanel(
                 ) {
                     Text(
                         text = stringResource(R.string.action_play),
-                        color = Color.White,
+                        color = colors.textPrimary,
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontSize = 16.sp,
                             lineHeight = 17.sp,
@@ -3856,7 +4533,7 @@ fun RightPlayAndSkinPanel(
                     ) { name ->
                         Text(
                             text = name,
-                            color = Color.White.copy(alpha = 0.78f),
+                            color = colors.textSubtle,
                             style = MaterialTheme.typography.labelSmall.copy(
                                 fontSize = 11.sp,
                                 lineHeight = 12.sp,
@@ -3879,19 +4556,20 @@ private fun NavigationRailButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val colors = LauncherTheme.colors
     val itemShape = RoundedCornerShape(16.dp)
     val bgColor by animateColorAsState(
-        targetValue = if (selected) Color.White.copy(alpha = 0.22f) else Color.Transparent,
+        targetValue = if (selected) colors.surfaceCardSelected else colors.transparent,
         animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
         label = "navItemBg",
     )
     val borderColor by animateColorAsState(
-        targetValue = if (selected) Color.White.copy(alpha = 0.42f) else Color.Transparent,
+        targetValue = if (selected) colors.borderSelectedCard else colors.transparent,
         animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
         label = "navItemBorder",
     )
     val contentColor by animateColorAsState(
-        targetValue = if (selected) Color(0xFFFFDF8E) else Color.White.copy(alpha = 0.88f),
+        targetValue = if (selected) colors.accent else colors.textButton,
         animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
         label = "navItemContent",
     )
@@ -3936,7 +4614,7 @@ private fun NavigationRailButton(
                     .width(3.dp)
                     .height(24.dp)
                     .clip(RoundedCornerShape(2.dp))
-                    .background(Color(0xFFFFDF8E)),
+                    .background(colors.accent),
             )
         }
 
@@ -3997,339 +4675,391 @@ private fun NavigationRailButton(
     }
 }
 
+private enum class SettingsCategory(
+    @StringRes val titleRes: Int,
+    @DrawableRes val iconRes: Int,
+) {
+    DISPLAY_AND_RENDERER(
+        titleRes = R.string.settings_category_display_renderer,
+        iconRes = R.drawable.ic_display_renderer,
+    ),
+    APPEARANCE(
+        titleRes = R.string.settings_category_appearance,
+        iconRes = R.drawable.ic_appearance,
+    ),
+}
+
 @Composable
 private fun SettingsPanelContent(
-    selectedRenderer: RendererType,
-    rendererInstallStates: Map<RendererType, Boolean>,
-    installedRuntimes: Map<JavaRuntimeVersion, InstalledJavaRuntime?>,
-    engineStatus: GameEngineStatus,
-    engineLogs: List<String>,
-    onRendererSelect: (RendererType) -> Unit,
-    onDownloadRenderer: (RendererType) -> Unit,
-    onDownloadRuntime: (JavaRuntimeVersion) -> Unit,
-    onStopGame: () -> Unit,
+    backgroundConfig: BackgroundConfig,
+    accentColor: Color,
+    isImportingBackground: Boolean,
+    backgroundImportError: String?,
+    onPickBackgroundMedia: () -> Unit,
+    onResetBackground: () -> Unit,
+    onAccentColorChange: (Color) -> Unit,
+    onOpenAccentColorPicker: () -> Unit,
 ) {
-    Row(
+    val colors = LauncherTheme.colors
+    var selectedCategory by remember { mutableStateOf(SettingsCategory.DISPLAY_AND_RENDERER) }
+
+    Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        // Left Column: Renderer Selection (MobileGlues & Krypton Wrapper) + Engine Console
-        Column(
-            modifier = Modifier
-                .weight(1.08f)
-                .fillMaxHeight()
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+        // Top Category Tab Bar ("Display and Renderer", "Appearance") styled like rail bar buttons
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = stringResource(R.string.settings_renderer_title),
-                color = Color.White,
-                style = MaterialTheme.typography.titleSmall.copy(
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                ),
-            )
-
-            RendererType.entries.forEach { renderer ->
-                val isSelected = renderer == selectedRenderer
-                val isInstalled = rendererInstallStates[renderer] == true
-                val cardShape = RoundedCornerShape(14.dp)
-                val cardBg by animateColorAsState(
-                    targetValue = if (isSelected) Color.White.copy(alpha = 0.20f) else Color.White.copy(alpha = 0.08f),
-                    animationSpec = tween(durationMillis = 200),
-                    label = "rendererCardBg",
+            SettingsCategory.entries.forEach { category ->
+                val isSelected = selectedCategory == category
+                val tabShape = RoundedCornerShape(16.dp)
+                val tabBg by animateColorAsState(
+                    targetValue = if (isSelected) colors.surfaceCardSelected else colors.transparent,
+                    animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+                    label = "settingsCategoryBg",
                 )
-                val cardBorder by animateColorAsState(
-                    targetValue = if (isSelected) Color(0xFFFFDF8E).copy(alpha = 0.65f) else Color.White.copy(alpha = 0.16f),
-                    animationSpec = tween(durationMillis = 200),
-                    label = "rendererCardBorder",
+                val tabBorder by animateColorAsState(
+                    targetValue = if (isSelected) colors.borderSelectedCard else colors.transparent,
+                    animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+                    label = "settingsCategoryBorder",
+                )
+                val tabContentColor by animateColorAsState(
+                    targetValue = if (isSelected) colors.accent else colors.textButton,
+                    animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+                    label = "settingsCategoryContent",
+                )
+                val selectedScale by animateFloatAsState(
+                    targetValue = if (isSelected) 1.04f else 1.0f,
+                    animationSpec = spring(
+                        dampingRatio = 0.72f,
+                        stiffness = 380f,
+                    ),
+                    label = "settingsCategorySelectedScale",
                 )
 
-                Column(
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
+                        .graphicsLayer {
+                            scaleX = selectedScale
+                            scaleY = selectedScale
+                        }
                         .smoothPressClickable(
-                            pressScale = 0.98f,
-                            onClick = { onRendererSelect(renderer) },
+                            pressScale = 0.92f,
+                            onClick = { selectedCategory = category },
                         )
-                        .clip(cardShape)
-                        .background(cardBg)
-                        .border(1.dp, cardBorder, cardShape)
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                        .clip(tabShape)
+                        .background(tabBg)
+                        .border(1.dp, tabBorder, tabShape),
+                    contentAlignment = Alignment.Center,
                 ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text(
-                                text = renderer.displayName,
-                                color = if (isSelected) Color(0xFFFFDF8E) else Color.White,
-                                style = MaterialTheme.typography.bodyMedium.copy(
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold,
-                                ),
-                            )
-                            Text(
-                                text = renderer.glVersionLabel,
-                                color = Color.White.copy(alpha = 0.72f),
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                ),
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(Color.White.copy(alpha = 0.12f))
-                                    .padding(horizontal = 6.dp, vertical = 2.dp),
-                            )
-                        }
-
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            if (isSelected) {
-                                Text(
-                                    text = stringResource(R.string.renderer_badge_active),
-                                    color = Color(0xFF7EE2A8),
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                    ),
-                                )
-                            }
-                            val btnShape = RoundedCornerShape(8.dp)
-                            Box(
-                                modifier = Modifier
-                                    .smoothPressClickable(
-                                        pressScale = 0.94f,
-                                        onClick = { onDownloadRenderer(renderer) },
-                                    )
-                                    .clip(btnShape)
-                                    .background(Color.White.copy(alpha = 0.15f))
-                                    .border(1.dp, Color.White.copy(alpha = 0.28f), btnShape)
-                                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(
-                                    text = if (isInstalled) {
-                                        stringResource(R.string.action_reinstall)
-                                    } else {
-                                        stringResource(R.string.action_download)
-                                    },
-                                    color = Color.White,
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                    ),
-                                )
-                            }
-                        }
-                    }
-
-                    Text(
-                        text = renderer.subtitle,
-                        color = Color.White.copy(alpha = 0.72f),
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontSize = 11.sp,
+                        modifier = Modifier.padding(
+                            start = 14.dp,
+                            end = 14.dp,
+                            top = 9.dp,
+                            bottom = 11.dp,
                         ),
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(2.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text(
-                    text = stringResource(R.string.settings_engine_console_title),
-                    color = Color.White,
-                    style = MaterialTheme.typography.titleSmall.copy(
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                    ),
-                )
-                if (engineStatus.state == GameEngineState.RUNNING) {
-                    val stopShape = RoundedCornerShape(8.dp)
-                    Box(
-                        modifier = Modifier
-                            .smoothPressClickable(
-                                pressScale = 0.94f,
-                                onClick = onStopGame,
-                            )
-                            .clip(stopShape)
-                            .background(Color(0xFFE5484D).copy(alpha = 0.28f))
-                            .border(1.dp, Color(0xFFFF7A7E).copy(alpha = 0.50f), stopShape)
-                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Text(
-                            text = stringResource(R.string.action_stop_game),
-                            color = Color(0xFFFFB2B4),
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                            ),
+                        Icon(
+                            painter = painterResource(id = category.iconRes),
+                            contentDescription = null,
+                            tint = tabContentColor,
+                            modifier = Modifier.size(18.dp),
                         )
-                    }
-                }
-            }
-
-            val consoleShape = RoundedCornerShape(12.dp)
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(consoleShape)
-                    .background(Color.Black.copy(alpha = 0.28f))
-                    .border(1.dp, Color.White.copy(alpha = 0.14f), consoleShape)
-                    .padding(10.dp),
-                verticalArrangement = Arrangement.spacedBy(3.dp),
-            ) {
-                Text(
-                    text = "${engineStatus.state.name}: ${engineStatus.stageMessage}",
-                    color = Color(0xFFFFDF8E),
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    ),
-                )
-                if (engineLogs.isEmpty()) {
-                    Text(
-                        text = stringResource(R.string.engine_idle_hint),
-                        color = Color.White.copy(alpha = 0.58f),
-                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
-                    )
-                } else {
-                    engineLogs.takeLast(6).forEach { logLine ->
                         Text(
-                            text = logLine,
-                            color = Color.White.copy(alpha = 0.80f),
-                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+                            text = stringResource(category.titleRes),
+                            color = tabContentColor,
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontSize = 13.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                            ),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
+
+                    // Glowing active indicator bar along the bottom edge, matching rail bar buttons
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = isSelected,
+                        enter = fadeIn(tween(180)) + scaleIn(
+                            initialScale = 0.3f,
+                            animationSpec = spring(dampingRatio = 0.68f, stiffness = 420f),
+                        ),
+                        exit = fadeOut(tween(140)) + scaleOut(
+                            targetScale = 0.3f,
+                            animationSpec = tween(140),
+                        ),
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 3.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .width(24.dp)
+                                .height(3.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(colors.accent),
+                        )
+                    }
                 }
             }
         }
 
-        // Right Column: OpenJDK Runtime Manager (ZalithLauncher2 JRE 8, 17, 21, 25)
-        Column(
-            modifier = Modifier
-                .weight(0.92f)
-                .fillMaxHeight()
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Text(
-                text = stringResource(R.string.settings_openjdk_title),
-                color = Color.White,
-                style = MaterialTheme.typography.titleSmall.copy(
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                ),
+        PanelHeaderDivider()
+
+        // Category content area
+        when (selectedCategory) {
+            SettingsCategory.DISPLAY_AND_RENDERER -> Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
             )
+            SettingsCategory.APPEARANCE -> {
+                val isDefaultBg = backgroundConfig.source is BackgroundSource.MinecraftSunset ||
+                    backgroundConfig.source is BackgroundSource.SolidColor
+                val accentHex = remember(accentColor) { formatColorHex(accentColor) }
+                val isDefaultAccent = remember(accentColor) {
+                    accentHex == formatColorHex(LauncherColorTokens.DefaultAccent)
+                }
 
-            JavaRuntimeVersion.entries.forEach { runtimeVersion ->
-                val installed = installedRuntimes[runtimeVersion]
-                val isInstalled = installed != null
-                val itemShape = RoundedCornerShape(14.dp)
-
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(itemShape)
-                        .background(Color.White.copy(alpha = if (isInstalled) 0.14f else 0.08f))
-                        .border(
-                            width = 1.dp,
-                            color = if (isInstalled) {
-                                Color(0xFF7EE2A8).copy(alpha = 0.45f)
-                            } else {
-                                Color.White.copy(alpha = 0.16f)
-                            },
-                            shape = itemShape,
-                        )
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    // Top Card: Custom Background -> [{image/video}        {reset}]
+                    AppearanceSettingsCard(
+                        title = stringResource(R.string.settings_bg_title),
+                        modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
+                        AppearanceSelectorResetRow(
+                            label = stringResource(R.string.settings_bg_pick_media),
+                            selectorEnabled = !isImportingBackground,
+                            resetEnabled = !isDefaultBg && !isImportingBackground,
+                            onSelectClick = onPickBackgroundMedia,
+                            onResetClick = onResetBackground,
+                        )
+
+                        if (isImportingBackground) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                CircularProgressIndicator(
+                                    color = colors.accent,
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.size(14.dp),
+                                )
+                                Text(
+                                    text = stringResource(R.string.settings_bg_importing),
+                                    color = colors.textSubtle,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                                )
+                            }
+                        } else if (!backgroundImportError.isNullOrBlank()) {
                             Text(
-                                text = runtimeVersion.displayName,
-                                color = Color.White,
-                                style = MaterialTheme.typography.bodyMedium.copy(
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold,
-                                ),
-                            )
-                            Text(
-                                text = if (isInstalled) {
-                                    stringResource(R.string.runtime_status_installed)
-                                } else {
-                                    stringResource(R.string.runtime_status_not_installed)
-                                },
-                                color = if (isInstalled) Color(0xFF7EE2A8) else Color.White.copy(alpha = 0.55f),
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                ),
+                                text = backgroundImportError,
+                                color = colors.errorText,
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
-                        Text(
-                            text = runtimeVersion.supportedMinecraftRange,
-                            color = Color.White.copy(alpha = 0.68f),
-                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                        )
                     }
 
-                    val actionShape = RoundedCornerShape(10.dp)
-                    Box(
-                        modifier = Modifier
-                            .smoothPressClickable(
-                                pressScale = 0.94f,
-                                onClick = { onDownloadRuntime(runtimeVersion) },
-                            )
-                            .clip(actionShape)
-                            .background(Color.White.copy(alpha = 0.16f))
-                            .border(1.dp, Color.White.copy(alpha = 0.30f), actionShape)
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                        contentAlignment = Alignment.Center,
+                    // Bottom Card: Accent Color -> [{current color}            {reset}]
+                    AppearanceSettingsCard(
+                        title = stringResource(R.string.settings_accent_title),
+                        modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text(
-                            text = if (isInstalled) {
-                                stringResource(R.string.action_reinstall)
-                            } else {
-                                stringResource(R.string.action_download)
+                        AppearanceSelectorResetRow(
+                            label = accentHex,
+                            resetEnabled = !isDefaultAccent,
+                            onSelectClick = onOpenAccentColorPicker,
+                            onResetClick = { onAccentColorChange(LauncherColorTokens.DefaultAccent) },
+                            leadingSwatch = {
+                                val swatchShape = RoundedCornerShape(6.dp)
+                                Box(
+                                    modifier = Modifier
+                                        .width(28.dp)
+                                        .height(18.dp)
+                                        .clip(swatchShape)
+                                        .background(accentColor)
+                                        .border(1.dp, colors.borderModal, swatchShape),
+                                )
                             },
-                            color = Color.White,
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                            ),
                         )
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun AppearanceSelectorResetRow(
+    label: String,
+    resetEnabled: Boolean,
+    onSelectClick: () -> Unit,
+    onResetClick: () -> Unit,
+    selectorEnabled: Boolean = true,
+    leadingSwatch: (@Composable () -> Unit)? = null,
+) {
+    val colors = LauncherTheme.colors
+    val selectorShape = RoundedCornerShape(12.dp)
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(
+            modifier = Modifier
+                .weight(1f, fill = false)
+                .padding(end = 12.dp)
+                .smoothPressClickable(
+                    enabled = selectorEnabled,
+                    pressScale = 0.96f,
+                    onClick = onSelectClick,
+                )
+                .clip(selectorShape)
+                .background(
+                    if (selectorEnabled) colors.surfaceButton else colors.surfaceButtonDisabled,
+                )
+                .border(
+                    1.dp,
+                    if (selectorEnabled) colors.borderButton else colors.borderSubtle,
+                    selectorShape,
+                )
+                .padding(horizontal = 14.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            if (leadingSwatch != null) {
+                leadingSwatch()
+            }
+
+            Text(
+                text = label,
+                color = if (selectorEnabled) colors.textPrimary else colors.textActionDisabled,
+                style = MaterialTheme.typography.labelMedium.copy(
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                ),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+
+        AppearanceOptionButton(
+            label = stringResource(R.string.action_reset),
+            selected = false,
+            enabled = resetEnabled,
+            onClick = onResetClick,
+        )
+    }
+}
+
+@Composable
+private fun AppearanceSettingsCard(
+    title: String,
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val colors = LauncherTheme.colors
+    val cardShape = RoundedCornerShape(16.dp)
+    Column(
+        modifier = modifier
+            .clip(cardShape)
+            .background(colors.surfaceCard)
+            .border(1.dp, colors.borderDefault, cardShape)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            text = title,
+            color = colors.textPrimary,
+            style = MaterialTheme.typography.titleSmall.copy(
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+            ),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        content()
+    }
+}
+
+@Composable
+private fun AppearanceOptionButton(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    val colors = LauncherTheme.colors
+    val btnShape = RoundedCornerShape(10.dp)
+    val bgColor by animateColorAsState(
+        targetValue = when {
+            !enabled -> colors.surfaceButtonDisabled
+            selected -> colors.accentContainer
+            else -> colors.surfaceButton
+        },
+        animationSpec = tween(durationMillis = 160),
+        label = "appearanceOptionBg",
+    )
+    val borderColor by animateColorAsState(
+        targetValue = when {
+            !enabled -> colors.borderSubtle
+            selected -> colors.accentBorder
+            else -> colors.borderButton
+        },
+        animationSpec = tween(durationMillis = 160),
+        label = "appearanceOptionBorder",
+    )
+    val textColor by animateColorAsState(
+        targetValue = when {
+            !enabled -> colors.textActionDisabled
+            selected -> colors.accent
+            else -> colors.textSecondary
+        },
+        animationSpec = tween(durationMillis = 160),
+        label = "appearanceOptionText",
+    )
+
+    Box(
+        modifier = modifier
+            .smoothPressClickable(
+                enabled = enabled,
+                pressScale = 0.95f,
+                onClick = onClick,
+            )
+            .clip(btnShape)
+            .background(bgColor)
+            .border(1.dp, borderColor, btnShape)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            color = textColor,
+            style = MaterialTheme.typography.labelMedium.copy(
+                fontSize = 11.sp,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            ),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

@@ -473,7 +473,7 @@ class JdkManager(
 
     /**
      * Decompresses all Pack200 archives (`.pack`) within `dir` into standard `.jar` files
-     * using the bundled `libunpack200.so` in `nativeLibraryDir` (or runtime `bin/unpack200`).
+     * using the bundled `libunpack200.so` in `nativeLibraryDir` (or system `unpack200`).
      */
     fun unpackPack200Files(dir: File) {
         val packFiles = dir.walkTopDown().filter { it.isFile && it.name.endsWith(".pack") }.toList()
@@ -482,16 +482,23 @@ class JdkManager(
         dir.setWritable(true, false)
         packFiles.forEach { it.setWritable(true, true) }
 
-        val candidateUnpackers = listOfNotNull(
-            nativeLibraryDir?.let { File(it, "libunpack200.so") },
-            File(dir, "bin/unpack200"),
-            File(getRuntimeExecDir(JavaRuntimeVersion.JRE_8), "bin/unpack200"),
-            File(getRuntimeStorageDir(JavaRuntimeVersion.JRE_8), "bin/unpack200")
-        )
+        val isAndroid = runCatching {
+            Class.forName("android.os.Build")
+            android.os.Build.VERSION.SDK_INT > 0
+        }.getOrDefault(false)
+
+        val candidateUnpackers = buildList {
+            nativeLibraryDir?.let { add(File(it, "libunpack200.so")) }
+            if (!isAndroid) {
+                add(File(dir, "bin/unpack200"))
+                add(File(getRuntimeExecDir(JavaRuntimeVersion.JRE_8), "bin/unpack200"))
+                add(File(getRuntimeStorageDir(JavaRuntimeVersion.JRE_8), "bin/unpack200"))
+            }
+        }
         val unpacker = candidateUnpackers.firstOrNull { it.isFile && it.canExecute() }
             ?: candidateUnpackers.firstOrNull { it.isFile }
-            ?: findSystemUnpack200()
-            ?: throw IOException("No unpack200 binary found to unpack Java 8 (.pack files)")
+            ?: findSystemUnpack200(isAndroid, dir)
+            ?: throw IOException("No unpack200 binary found to unpack Java 8 (.pack files). nativeLibraryDir=${nativeLibraryDir?.absolutePath}")
 
         unpacker.setExecutable(true, false)
 
@@ -523,7 +530,11 @@ class JdkManager(
         }
     }
 
-    private fun findSystemUnpack200(): File? {
+    private fun findSystemUnpack200(isAndroid: Boolean, dir: File): File? {
+        if (!isAndroid) {
+            val localBin = File(dir, "bin/unpack200")
+            if (localBin.isFile && localBin.canExecute()) return localBin
+        }
         val path = System.getenv("PATH") ?: return null
         return path.split(File.pathSeparator)
             .map { File(it, "unpack200") }

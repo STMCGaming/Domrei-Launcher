@@ -4680,10 +4680,6 @@ private enum class SettingsCategory(
     @StringRes val titleRes: Int,
     @DrawableRes val iconRes: Int,
 ) {
-    APPEARANCE(
-        titleRes = R.string.settings_category_appearance,
-        iconRes = R.drawable.ic_appearance,
-    ),
     DISPLAY_AND_RENDERER(
         titleRes = R.string.settings_category_display_renderer,
         iconRes = R.drawable.ic_display_renderer,
@@ -4695,6 +4691,10 @@ private enum class SettingsCategory(
     CONTROLS(
         titleRes = R.string.settings_category_controls,
         iconRes = R.drawable.ic_controls,
+    ),
+    APPEARANCE(
+        titleRes = R.string.settings_category_appearance,
+        iconRes = R.drawable.ic_appearance,
     ),
 }
 
@@ -4710,7 +4710,7 @@ private fun SettingsPanelContent(
     onOpenAccentColorPicker: () -> Unit,
 ) {
     val colors = LauncherTheme.colors
-    var selectedCategory by remember { mutableStateOf(SettingsCategory.APPEARANCE) }
+    var selectedCategory by remember { mutableStateOf(SettingsCategory.DISPLAY_AND_RENDERER) }
 
     Column(
         modifier = Modifier
@@ -4718,7 +4718,7 @@ private fun SettingsPanelContent(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        // Top Category Tab Bar ("Appearance", "Display and Renderer", "Java Tweak", "Controls") styled like rail bar buttons
+        // Top Category Tab Bar ("Display and Renderer", "Java Tweak", "Controls", "Appearance") styled like rail bar buttons
         Row(
             modifier = Modifier
                 .fillMaxWidth()

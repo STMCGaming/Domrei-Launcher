@@ -750,6 +750,8 @@ class DomreiGameEngine(
             it.name.contains("domrei-glfw-bridge") && it.isFile
         } ?: return
 
+        restoreCorruptedLegacyJars(classpathEntries, bridgeJar)
+
         val overrideEntries = mutableMapOf<String, ByteArray>()
         runCatching {
             ZipFile(bridgeJar).use { zip ->
@@ -769,7 +771,7 @@ class DomreiGameEngine(
                     }
                 }
 
-                // Text2Speech patch
+                // Text2Speech patch (modern only)
                 val narratorEntry = zip.getEntry("patches/text2speech/com/mojang/text2speech/NarratorLinux.class")
                     ?: zip.getEntry("com/mojang/text2speech/NarratorLinux.class")
                 narratorEntry?.let { entry ->
@@ -801,7 +803,8 @@ class DomreiGameEngine(
                 name.startsWith("lwjgl-3.") || name.startsWith("lwjgl-opengl") ->
                     overrideEntries.filterKeys { it.startsWith("org/lwjgl/opengl/") }
                 name.startsWith("oshi-core") -> overrideEntries.filterKeys { it.startsWith("oshi/") }
-                name.startsWith("text2speech") -> overrideEntries.filterKeys { it.startsWith("com/mojang/text2speech/") }
+                name.startsWith("text2speech") && !name.startsWith("text2speech-1.") ->
+                    overrideEntries.filterKeys { it.startsWith("com/mojang/text2speech/") }
                 name.startsWith("authlib") && !name.startsWith("authlib-1.") ->
                     overrideEntries.filterKeys { it.startsWith("com/mojang/authlib/") }
                 else -> emptyMap()
@@ -858,6 +861,153 @@ class DomreiGameEngine(
                 }
             }
         }
+    }
+
+    /**
+     * Checks if a legacy jar (such as authlib-1.x or text2speech-1.x) was corrupted by an older
+     * version of the launcher (e.g. patched with Java 17 bytecode or marked with a patch marker).
+     * If corrupted, restores the authentic Mojang Java 8 jar / classes from `00-domrei-glfw-bridge.jar`.
+     */
+    internal fun restoreCorruptedLegacyJars(classpathEntries: List<File>, bridgeJar: File) {
+        if (!bridgeJar.isFile) return
+
+        runCatching {
+            ZipFile(bridgeJar).use { bridgeZip ->
+                for (jarFile in classpathEntries) {
+                    if (!jarFile.isFile || jarFile == bridgeJar) continue
+                    val name = jarFile.name
+                    val isLegacyAuthlib = name.startsWith("authlib-1.")
+                    val isLegacyText2Speech = name.startsWith("text2speech-1.")
+                    if (!isLegacyAuthlib && !isLegacyText2Speech) continue
+
+                    val isCorrupted = isLegacyJarCorrupted(jarFile, maxAllowedMajorVersion = 52)
+                    if (!isCorrupted) continue
+
+                    appendLog("[DomreiEngine] Detected corrupted legacy library on disk: $name (healing...)")
+
+                    // First attempt: clean full jar replacement if bundled
+                    val cleanJarEntry = bridgeZip.getEntry("patches/clean-jars/$name")
+                    if (cleanJarEntry != null) {
+                        val tempJar = File(jarFile.parentFile, "$name.clean_tmp")
+                        bridgeZip.getInputStream(cleanJarEntry).use { input ->
+                            FileOutputStream(tempJar).use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                        jarFile.setWritable(true, true)
+                        if (jarFile.delete() && tempJar.renameTo(jarFile)) {
+                            // renamed
+                        } else {
+                            tempJar.copyTo(jarFile, overwrite = true)
+                            tempJar.delete()
+                        }
+                        clearPatchMarkers(jarFile)
+                        appendLog("[DomreiEngine] Successfully restored official $name")
+                        continue
+                    }
+
+                    // Second attempt: class-level replacement from legacy restore patch classes
+                    val prefix = if (isLegacyAuthlib) "patches/authlib-legacy/" else "patches/text2speech-legacy/"
+                    val restoreClasses = mutableMapOf<String, ByteArray>()
+                    val entries = bridgeZip.entries()
+                    while (entries.hasMoreElements()) {
+                        val entry = entries.nextElement()
+                        if (!entry.isDirectory && entry.name.startsWith(prefix) && entry.name.endsWith(".class")) {
+                            val classPath = entry.name.removePrefix(prefix)
+                            bridgeZip.getInputStream(entry).use { input ->
+                                restoreClasses[classPath] = input.readBytes()
+                            }
+                        }
+                    }
+
+                    if (restoreClasses.isNotEmpty()) {
+                        val tempJar = File(jarFile.parentFile, "$name.clean_tmp")
+                        ZipFile(jarFile).use { srcZip ->
+                            ZipOutputStream(FileOutputStream(tempJar)).use { zos ->
+                                val written = HashSet<String>()
+                                for ((cName, cBytes) in restoreClasses) {
+                                    zos.putNextEntry(ZipEntry(cName))
+                                    zos.write(cBytes)
+                                    zos.closeEntry()
+                                    written.add(cName)
+                                }
+                                val srcEntries = srcZip.entries()
+                                while (srcEntries.hasMoreElements()) {
+                                    val srcEntry = srcEntries.nextElement()
+                                    if (written.contains(srcEntry.name)) continue
+                                    written.add(srcEntry.name)
+                                    zos.putNextEntry(ZipEntry(srcEntry.name))
+                                    if (!srcEntry.isDirectory) {
+                                        srcZip.getInputStream(srcEntry).use { it.copyTo(zos) }
+                                    }
+                                    zos.closeEntry()
+                                }
+                            }
+                        }
+                        jarFile.setWritable(true, true)
+                        if (jarFile.delete() && tempJar.renameTo(jarFile)) {
+                            // renamed
+                        } else {
+                            tempJar.copyTo(jarFile, overwrite = true)
+                            tempJar.delete()
+                        }
+                        clearPatchMarkers(jarFile)
+                        appendLog("[DomreiEngine] Successfully repaired classes in $name")
+                    }
+                }
+            }
+        }.onFailure { e ->
+            appendLog("[DomreiEngine] Failed during legacy jar verification: ${e.message}")
+        }
+    }
+
+    private fun isLegacyJarCorrupted(jarFile: File, maxAllowedMajorVersion: Int = 52): Boolean {
+        val parent = jarFile.parentFile
+        if (parent != null) {
+            val hasStaleMarker = parent.listFiles { _, name ->
+                name.startsWith("${jarFile.name}.domrei_patch_")
+            }?.isNotEmpty() == true
+            if (hasStaleMarker) return true
+        }
+
+        return runCatching {
+            ZipFile(jarFile).use { zip ->
+                val entries = zip.entries()
+                while (entries.hasMoreElements()) {
+                    val entry = entries.nextElement()
+                    if (entry.name.endsWith(".class")) {
+                        zip.getInputStream(entry).use { input ->
+                            val header = ByteArray(8)
+                            var read = 0
+                            while (read < 8) {
+                                val r = input.read(header, read, 8 - read)
+                                if (r < 0) break
+                                read += r
+                            }
+                            if (read == 8 &&
+                                header[0] == 0xCA.toByte() &&
+                                header[1] == 0xFE.toByte() &&
+                                header[2] == 0xBA.toByte() &&
+                                header[3] == 0xBE.toByte()
+                            ) {
+                                val major = (header[6].toInt() and 0xFF shl 8) or (header[7].toInt() and 0xFF)
+                                if (major > maxAllowedMajorVersion) {
+                                    return true
+                                }
+                            }
+                        }
+                    }
+                }
+                false
+            }
+        }.getOrDefault(false)
+    }
+
+    private fun clearPatchMarkers(jarFile: File) {
+        val parent = jarFile.parentFile ?: return
+        parent.listFiles { _, name ->
+            name.startsWith("${jarFile.name}.domrei_patch_")
+        }?.forEach { it.delete() }
     }
 
     companion object {

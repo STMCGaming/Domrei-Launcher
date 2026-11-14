@@ -24,6 +24,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.tukaani.xz.LZMA2Options
 import org.tukaani.xz.XZOutputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.file.Files
@@ -400,6 +401,65 @@ class DomreiGameEngineTest {
                 assertArrayEquals(expectedAuthlibBytes, bytes)
             }
             assertTrue(File(tempRoot, "authlib-3.17.30.jar.domrei_patch_v3").exists())
+        } finally {
+            tempRoot.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `applyAndroidCompatibilityPatches automatically heals corrupted legacy authlib and removes markers`() {
+        val tempRoot = Files.createTempDirectory("domrei_heal_legacy_test").toFile()
+        try {
+            val engine = DomreiGameEngine(
+                JdkManager(File(tempRoot, "runtimes")),
+                RendererManager(File(tempRoot, "renderers"))
+            )
+            val bridgeJar = File(tempRoot, "00-domrei-glfw-bridge.jar")
+            val cleanJava8ClassBytes = byteArrayOf(
+                0xCA.toByte(), 0xFE.toByte(), 0xBA.toByte(), 0xBE.toByte(),
+                0x00, 0x00, 0x00, 52 // Java 8 major version 52
+            )
+
+            // Bridge bundles clean legacy jar in patches/clean-jars/
+            val baos = ByteArrayOutputStream()
+            ZipOutputStream(baos).use { zos ->
+                zos.putNextEntry(ZipEntry("com/mojang/authlib/yggdrasil/YggdrasilAuthenticationService.class"))
+                zos.write(cleanJava8ClassBytes)
+                zos.closeEntry()
+            }
+            val cleanJarBytes = baos.toByteArray()
+
+            ZipOutputStream(FileOutputStream(bridgeJar)).use { zos ->
+                zos.putNextEntry(ZipEntry("patches/clean-jars/authlib-1.5.25.jar"))
+                zos.write(cleanJarBytes)
+                zos.closeEntry()
+            }
+
+            // Simulate corrupted legacy authlib on user's disk (injected with Java 17 bytecode = major 61)
+            val corruptedJava17ClassBytes = byteArrayOf(
+                0xCA.toByte(), 0xFE.toByte(), 0xBA.toByte(), 0xBE.toByte(),
+                0x00, 0x00, 0x00, 61 // Java 17 major version 61
+            )
+            val legacyAuthlibJar = File(tempRoot, "authlib-1.5.25.jar")
+            ZipOutputStream(FileOutputStream(legacyAuthlibJar)).use { zos ->
+                zos.putNextEntry(ZipEntry("com/mojang/authlib/yggdrasil/YggdrasilAuthenticationService.class"))
+                zos.write(corruptedJava17ClassBytes)
+                zos.closeEntry()
+            }
+            val staleMarker = File(tempRoot, "authlib-1.5.25.jar.domrei_patch_v3").apply { writeText("1") }
+            assertTrue("Expected stale marker to exist before heal", staleMarker.exists())
+
+            // Run compatibility patches
+            engine.applyAndroidCompatibilityPatches(listOf(bridgeJar, legacyAuthlibJar))
+
+            // Verify: stale marker deleted, and authlib class restored to Java 8 (version 52)
+            assertFalse("Stale marker must be removed after healing", staleMarker.exists())
+            ZipFile(legacyAuthlibJar).use { zip ->
+                val entry = zip.getEntry("com/mojang/authlib/yggdrasil/YggdrasilAuthenticationService.class")
+                assertNotNull(entry)
+                val bytes = zip.getInputStream(entry).use { it.readBytes() }
+                assertEquals(52, bytes[7].toInt())
+            }
         } finally {
             tempRoot.deleteRecursively()
         }

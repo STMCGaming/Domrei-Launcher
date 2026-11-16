@@ -110,6 +110,7 @@ class MinecraftInstanceManager(
             }
         }
 
+        val fromIndex = instancesIndexFile.isFile && loaded.isNotEmpty()
         val bogusIds = loaded.keys.filter { id ->
             id.startsWith("launch_") || id.startsWith("jre_") || id.startsWith("renderer_")
         }
@@ -118,10 +119,14 @@ class MinecraftInstanceManager(
                 loaded.remove(id)
                 File(instancesDir, id).deleteRecursively()
             }
-            writeInstancesIndex(loaded.values.sortedByDescending { it.createdAt })
+            writeInstancesIndex(loaded.values.toList())
         }
 
-        return loaded.values.sortedByDescending { it.createdAt }
+        return if (fromIndex) loaded.values.toList() else loaded.values.sortedByDescending { it.createdAt }
+    }
+
+    fun saveInstancesOrder(instances: List<LauncherInstance>) {
+        writeInstancesIndex(instances)
     }
 
     fun saveInstance(instance: LauncherInstance) {

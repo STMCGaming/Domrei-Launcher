@@ -80,6 +80,7 @@ import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -140,6 +141,7 @@ import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
@@ -496,6 +498,8 @@ fun LauncherScreen(
     }
     // Remember the selected instance across app restarts
     LaunchedEffect(selectedInstanceId) { instanceManager.saveSelectedInstanceId(selectedInstanceId) }
+    // Persist instance ordering across app restarts
+    LaunchedEffect(instances) { instanceManager.saveInstancesOrder(instances) }
 
     // Dynamic Island-style Install ProgressBar state (strictly for AddInstance)
     var activeInstallTask by remember { mutableStateOf<InstanceInstallTask?>(null) }
@@ -1163,6 +1167,7 @@ fun LauncherScreen(
                 onRemoveInstance = { instance ->
                     activeDialog = LauncherDialog.ConfirmRemoveInstance(instance)
                 },
+                onReorderInstances = { instances = it },
                 accounts = accounts,
                 selectedAccountId = selectedAccountId,
                 onAccountSelect = { account -> selectedAccountId = account.id },
@@ -1179,6 +1184,7 @@ fun LauncherScreen(
                 onRemoveAccount = { account ->
                     activeDialog = LauncherDialog.ConfirmRemoveAccount(account)
                 },
+                onReorderAccounts = { accounts = it },
                 skinRefreshKey = skinRefreshKey,
                 accentColor = accentColor,
                 isImportingBackground = isImportingBackground,
@@ -1247,6 +1253,7 @@ fun LauncherScreen(
                     isChangePanelOpen = isChangePanelOpen,
                     onChangeToggle = { isChangePanelOpen = !isChangePanelOpen },
                     isSuspended = activeDialog != null,
+                    onReorderInstances = { instances = it },
                     onPlayClick = {
                         if (engineStatus.state == GameEngineState.RUNNING) {
                             gameEngine.stopActiveGame()
@@ -4109,6 +4116,7 @@ fun UnifiedLeftRailAndPanel(
     onInstanceSelect: (LauncherInstance) -> Unit,
     onAddInstanceClick: () -> Unit,
     onRemoveInstance: (LauncherInstance) -> Unit,
+    onReorderInstances: (List<LauncherInstance>) -> Unit = {},
     accounts: List<LauncherAccount>,
     selectedAccountId: String,
     onAccountSelect: (LauncherAccount) -> Unit,
@@ -4116,6 +4124,7 @@ fun UnifiedLeftRailAndPanel(
     onRequestRenameAccount: (LauncherAccount) -> Unit,
     onRefreshAccount: (LauncherAccount) -> Unit = {},
     onRemoveAccount: (LauncherAccount) -> Unit,
+    onReorderAccounts: (List<LauncherAccount>) -> Unit = {},
     skinRefreshKey: Int = 0,
     accentColor: Color,
     isImportingBackground: Boolean,
@@ -4283,6 +4292,7 @@ fun UnifiedLeftRailAndPanel(
                                     onInstanceSelect = onInstanceSelect,
                                     onAddInstanceClick = onAddInstanceClick,
                                     onRemoveInstance = onRemoveInstance,
+                                    onReorderInstances = onReorderInstances,
                                 )
                                 LauncherDestination.ACCOUNT -> AccountPanelContent(
                                     accounts = accounts,
@@ -4294,6 +4304,7 @@ fun UnifiedLeftRailAndPanel(
                                     onRemoveAccount = onRemoveAccount,
                                     skinRefreshKey = skinRefreshKey,
                                     isSuspended = isSuspended,
+                                    onReorderAccounts = onReorderAccounts,
                                 )
                                 LauncherDestination.SETTINGS -> SettingsPanelContent(
                                     backgroundConfig = backgroundConfig,
@@ -4338,6 +4349,7 @@ private fun InstancesPanelContent(
     onInstanceSelect: (LauncherInstance) -> Unit,
     onAddInstanceClick: () -> Unit,
     onRemoveInstance: (LauncherInstance) -> Unit,
+    onReorderInstances: (List<LauncherInstance>) -> Unit = {},
 ) {
     val colors = LauncherTheme.colors
     Column(
@@ -4409,55 +4421,83 @@ private fun InstancesPanelContent(
                 )
             }
         } else {
-            Column(
+            val lazyListState = rememberLazyListState()
+            val haptic = LocalHapticFeedback.current
+            val soundPlayer = LocalLauncherSoundPlayer.current
+            val reorderState = rememberReorderableState(
+                listState = lazyListState,
+                onMove = { from, to -> onReorderInstances(instances.reorder(from, to)) },
+            )
+
+            LazyColumn(
+                state = lazyListState,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f)
-                    .verticalScroll(rememberScrollState())
-                    .animateContentSize(
-                        animationSpec = spring(
-                            dampingRatio = 0.85f,
-                            stiffness = 400f,
-                        ),
-                    ),
+                    .weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.Top),
             ) {
-                instances.forEach { instance ->
-                    androidx.compose.runtime.key(instance.id) {
-                        val isSelected = instance.id == selectedInstanceId
-                        val instanceName = instance.name
-                        val subtitle = if (instance.loaderType == InstanceLoaderType.FABRIC && !instance.loaderVersion.isNullOrBlank()) {
-                            stringResource(R.string.instance_subtitle_fabric, instance.mcVersion, instance.loaderVersion)
-                        } else {
-                            stringResource(R.string.instance_subtitle_vanilla, instance.mcVersion)
-                        }
-                        val itemShape = RoundedCornerShape(14.dp)
-                        val itemBg by animateColorAsState(
-                            targetValue = if (isSelected) colors.surfaceCardSelected else colors.surfaceCard,
-                            animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
-                            label = "panelInstanceItemBg",
-                        )
-                        val itemBorder by animateColorAsState(
-                            targetValue = if (isSelected) colors.borderSelectedCard else colors.borderSubtle,
-                            animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
-                            label = "panelInstanceItemBorder",
-                        )
-                        val titleColor by animateColorAsState(
-                            targetValue = if (isSelected) colors.accent else colors.textPrimary,
-                            animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
-                            label = "panelInstanceTitleColor",
-                        )
+                items(
+                    count = instances.size,
+                    key = { index -> instances[index].id },
+                ) { index ->
+                    val instance = instances[index]
+                    val isDragging = reorderState.draggedIndex == index
+                    val itemModifier = if (isDragging) Modifier else Modifier.animateItem()
 
+                    val isSelected = instance.id == selectedInstanceId
+                    val instanceName = instance.name
+                    val subtitle = if (instance.loaderType == InstanceLoaderType.FABRIC && !instance.loaderVersion.isNullOrBlank()) {
+                        stringResource(R.string.instance_subtitle_fabric, instance.mcVersion, instance.loaderVersion)
+                    } else {
+                        stringResource(R.string.instance_subtitle_vanilla, instance.mcVersion)
+                    }
+                    val itemShape = RoundedCornerShape(14.dp)
+                    val itemBg by animateColorAsState(
+                        targetValue = if (isSelected) colors.surfaceCardSelected else colors.surfaceCard,
+                        animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+                        label = "panelInstanceItemBg",
+                    )
+                    val itemBorder by animateColorAsState(
+                        targetValue = if (isSelected) colors.borderSelectedCard else colors.borderSubtle,
+                        animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+                        label = "panelInstanceItemBorder",
+                    )
+                    val titleColor by animateColorAsState(
+                        targetValue = if (isSelected) colors.accent else colors.textPrimary,
+                        animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+                        label = "panelInstanceTitleColor",
+                    )
+
+                    Box(
+                        modifier = itemModifier
+                            .fillMaxWidth()
+                            .reorderableItem(
+                                state = reorderState,
+                                key = instance.id,
+                                index = index,
+                                enabled = instances.size > 1,
+                                haptic = haptic,
+                                soundPlayer = soundPlayer,
+                            ),
+                    ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .smoothPressClickable(
                                     pressScale = 0.98f,
-                                    onClick = { onInstanceSelect(instance) },
+                                    onClick = {
+                                        if (reorderState.draggedIndex == null) {
+                                            onInstanceSelect(instance)
+                                        }
+                                    },
                                 )
                                 .clip(itemShape)
-                                .background(itemBg)
-                                .border(1.dp, itemBorder, itemShape)
+                                .background(if (isDragging) colors.surfaceCardSelected else itemBg)
+                                .border(
+                                    width = if (isDragging) 1.5.dp else 1.dp,
+                                    color = if (isDragging) colors.accent else itemBorder,
+                                    shape = itemShape,
+                                )
                                 .padding(horizontal = 12.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -4497,29 +4537,39 @@ private fun InstancesPanelContent(
                                 }
                             }
 
-                            Spacer(modifier = Modifier.width(8.dp))
-
-                            val removeShape = RoundedCornerShape(10.dp)
-                            Box(
-                                modifier = Modifier
-                                    .smoothPressClickable(
-                                        pressScale = 0.92f,
-                                        onClick = { onRemoveInstance(instance) },
-                                    )
-                                    .clip(removeShape)
-                                    .background(colors.errorContainer)
-                                    .border(1.dp, colors.errorBorderStrong, removeShape)
-                                    .padding(horizontal = 10.dp, vertical = 5.dp),
-                                contentAlignment = Alignment.Center,
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                Text(
-                                    text = stringResource(R.string.action_remove),
-                                    color = colors.errorText,
-                                    style = MaterialTheme.typography.labelMedium.copy(
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                    ),
+                                Icon(
+                                    painter = painterResource(id = R.drawable.ic_drag_handle),
+                                    contentDescription = null,
+                                    tint = colors.iconMuted.copy(alpha = 0.40f),
+                                    modifier = Modifier.size(16.dp),
                                 )
+
+                                val removeShape = RoundedCornerShape(10.dp)
+                                Box(
+                                    modifier = Modifier
+                                        .smoothPressClickable(
+                                            pressScale = 0.92f,
+                                            onClick = { onRemoveInstance(instance) },
+                                        )
+                                        .clip(removeShape)
+                                        .background(colors.errorContainer)
+                                        .border(1.dp, colors.errorBorderStrong, removeShape)
+                                        .padding(horizontal = 10.dp, vertical = 5.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text(
+                                        text = stringResource(R.string.action_remove),
+                                        color = colors.errorText,
+                                        style = MaterialTheme.typography.labelMedium.copy(
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                        ),
+                                    )
+                                }
                             }
                         }
                     }
@@ -4580,6 +4630,7 @@ private fun AccountPanelContent(
     onRemoveAccount: (LauncherAccount) -> Unit,
     skinRefreshKey: Int = 0,
     isSuspended: Boolean = false,
+    onReorderAccounts: (List<LauncherAccount>) -> Unit = {},
 ) {
     val colors = LauncherTheme.colors
     val context = LocalContext.current
@@ -4692,53 +4743,74 @@ private fun AccountPanelContent(
                 PanelHeaderDivider()
 
                 // Account List: [{profileskinhead} {username}     {•••}]
-                Column(
+                val lazyListState = rememberLazyListState()
+                val haptic = LocalHapticFeedback.current
+                val soundPlayer = LocalLauncherSoundPlayer.current
+                val reorderState = rememberReorderableState(
+                    listState = lazyListState,
+                    onMove = { from, to -> onReorderAccounts(accounts.reorder(from, to)) },
+                    onDragStart = { openOptionsAccountId = null },
+                )
+
+                LazyColumn(
+                    state = lazyListState,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f)
-                        .verticalScroll(rememberScrollState())
-                        .animateContentSize(
-                            animationSpec = spring(
-                                dampingRatio = 0.85f,
-                                stiffness = 400f,
-                            ),
-                        ),
+                        .weight(1f),
                     verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.Top),
                 ) {
-                    accounts.forEach { account ->
-                        androidx.compose.runtime.key(account.id) {
-                            val isSelected = account.id == selectedAccount?.id
-                            val isMenuOpen = openOptionsAccountId == account.id
-                            val itemShape = RoundedCornerShape(14.dp)
-                            val itemBg by animateColorAsState(
-                                targetValue = if (isSelected) colors.surfaceCardSelected else colors.surfaceCard,
-                                animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
-                                label = "accountItemBg",
-                            )
-                            val itemBorder by animateColorAsState(
-                                targetValue = if (isSelected) colors.borderSelectedCard else colors.borderSubtle,
-                                animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
-                                label = "accountItemBorder",
-                            )
-                            val titleColor by animateColorAsState(
-                                targetValue = if (isSelected) colors.accent else colors.textPrimary,
-                                animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
-                                label = "accountTitleColor",
-                            )
-                            val moreBtnBg by animateColorAsState(
-                                targetValue = if (isMenuOpen) colors.surfaceCardSelected else colors.transparent,
-                                animationSpec = tween(durationMillis = 180),
-                                label = "moreBtnBg",
-                            )
-                            val moreBtnRotation by animateFloatAsState(
-                                targetValue = if (isMenuOpen) 90f else 0f,
-                                animationSpec = spring(
-                                    dampingRatio = 0.72f,
-                                    stiffness = 420f,
-                                ),
-                                label = "moreBtnRotation",
-                            )
+                    items(
+                        count = accounts.size,
+                        key = { index -> accounts[index].id },
+                    ) { index ->
+                        val account = accounts[index]
+                        val isDragging = reorderState.draggedIndex == index
+                        val itemModifier = if (isDragging) Modifier else Modifier.animateItem()
 
+                        val isSelected = account.id == selectedAccount?.id
+                        val isMenuOpen = openOptionsAccountId == account.id
+                        val itemShape = RoundedCornerShape(14.dp)
+                        val itemBg by animateColorAsState(
+                            targetValue = if (isSelected) colors.surfaceCardSelected else colors.surfaceCard,
+                            animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+                            label = "accountItemBg",
+                        )
+                        val itemBorder by animateColorAsState(
+                            targetValue = if (isSelected) colors.borderSelectedCard else colors.borderSubtle,
+                            animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+                            label = "accountItemBorder",
+                        )
+                        val titleColor by animateColorAsState(
+                            targetValue = if (isSelected) colors.accent else colors.textPrimary,
+                            animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+                            label = "accountTitleColor",
+                        )
+                        val moreBtnBg by animateColorAsState(
+                            targetValue = if (isMenuOpen) colors.surfaceCardSelected else colors.transparent,
+                            animationSpec = tween(durationMillis = 180),
+                            label = "moreBtnBg",
+                        )
+                        val moreBtnRotation by animateFloatAsState(
+                            targetValue = if (isMenuOpen) 90f else 0f,
+                            animationSpec = spring(
+                                dampingRatio = 0.72f,
+                                stiffness = 420f,
+                            ),
+                            label = "moreBtnRotation",
+                        )
+
+                        Box(
+                            modifier = itemModifier
+                                .fillMaxWidth()
+                                .reorderableItem(
+                                    state = reorderState,
+                                    key = account.id,
+                                    index = index,
+                                    enabled = accounts.size > 1,
+                                    haptic = haptic,
+                                    soundPlayer = soundPlayer,
+                                ),
+                        ) {
                             Column(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -4749,13 +4821,19 @@ private fun AccountPanelContent(
                                         .smoothPressClickable(
                                             pressScale = 0.98f,
                                             onClick = {
-                                                openOptionsAccountId = null
-                                                onAccountSelect(account)
+                                                if (reorderState.draggedIndex == null) {
+                                                    openOptionsAccountId = null
+                                                    onAccountSelect(account)
+                                                }
                                             },
                                         )
                                         .clip(itemShape)
-                                        .background(itemBg)
-                                        .border(1.dp, itemBorder, itemShape)
+                                        .background(if (isDragging) colors.surfaceCardSelected else itemBg)
+                                        .border(
+                                            width = if (isDragging) 1.5.dp else 1.dp,
+                                            color = if (isDragging) colors.accent else itemBorder,
+                                            shape = itemShape,
+                                        )
                                         .padding(start = 12.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -4822,7 +4900,7 @@ private fun AccountPanelContent(
                                         }
                                     }
 
-                                    // Right: More options {•••} (plus smoothly animated inline Rename / Remove)
+                                    // Right: More options {•••} (plus smoothly animated inline Rename / Remove) + Drag Handle
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -4937,32 +5015,40 @@ private fun AccountPanelContent(
                                             modifier = Modifier
                                                 .size(32.dp)
                                                 .smoothPressClickable(
-                                                    pressScale = 0.90f,
-                                                    onClick = {
-                                                        openOptionsAccountId =
-                                                            if (isMenuOpen) null else account.id
-                                                    },
-                                                )
-                                                .clip(RoundedCornerShape(10.dp))
-                                                .background(moreBtnBg),
-                                            contentAlignment = Alignment.Center,
-                                        ) {
-                                            Icon(
-                                                painter = painterResource(id = R.drawable.ic_more_horiz),
-                                                contentDescription = stringResource(R.string.action_more_options),
-                                                tint = colors.textSecondary,
-                                                modifier = Modifier
-                                                    .size(20.dp)
-                                                    .graphicsLayer { rotationZ = moreBtnRotation },
+                                                pressScale = 0.90f,
+                                                onClick = {
+                                                    openOptionsAccountId =
+                                                        if (isMenuOpen) null else account.id
+                                                },
                                             )
-                                        }
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(moreBtnBg),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Icon(
+                                            painter = painterResource(id = R.drawable.ic_more_horiz),
+                                            contentDescription = stringResource(R.string.action_more_options),
+                                            tint = colors.textSecondary,
+                                            modifier = Modifier
+                                                .size(20.dp)
+                                                .graphicsLayer { rotationZ = moreBtnRotation },
+                                        )
                                     }
+
+                                    // Subtle drag handle icon
+                                    Icon(
+                                        painter = painterResource(id = R.drawable.ic_drag_handle),
+                                        contentDescription = null,
+                                        tint = colors.iconMuted.copy(alpha = 0.40f),
+                                        modifier = Modifier.size(16.dp),
+                                    )
                                 }
                             }
                         }
                     }
                 }
             }
+        }
 
             // Right Side: Interactive 3D Skin View above (Idle animation, rotatable by drag, NOT auto-rotating)
             Column(
@@ -5025,6 +5111,7 @@ fun RightPlayAndSkinPanel(
     isSuspended: Boolean = false,
     activeAccount: LauncherAccount? = null,
     skinRefreshKey: Int = 0,
+    onReorderInstances: (List<LauncherInstance>) -> Unit = {},
 ) {
     val colors = LauncherTheme.colors
     val context = LocalContext.current
@@ -5223,14 +5310,29 @@ fun RightPlayAndSkinPanel(
                         }
                     }
                 } else {
-                    Column(
+                    val lazyListState = rememberLazyListState()
+                    val haptic = LocalHapticFeedback.current
+                    val soundPlayer = LocalLauncherSoundPlayer.current
+                    val reorderState = rememberReorderableState(
+                        listState = lazyListState,
+                        onMove = { from, to -> onReorderInstances(instances.reorder(from, to)) },
+                    )
+
+                    LazyColumn(
+                        state = lazyListState,
                         modifier = Modifier
                             .fillMaxSize()
-                            .verticalScroll(rememberScrollState())
                             .padding(10.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.Top),
                     ) {
-                        instances.forEach { instance ->
+                        items(
+                            count = instances.size,
+                            key = { index -> instances[index].id },
+                        ) { index ->
+                            val instance = instances[index]
+                            val isDragging = reorderState.draggedIndex == index
+                            val itemModifier = if (isDragging) Modifier else Modifier.animateItem()
+
                             val isSelected = instance.id == selectedInstanceId
                             val instanceName = instance.name
                             val instanceSubtitle = if (
@@ -5258,47 +5360,80 @@ fun RightPlayAndSkinPanel(
                                 label = "instanceItemContent",
                             )
 
-                            Row(
-                                modifier = Modifier
+                            Box(
+                                modifier = itemModifier
                                     .fillMaxWidth()
-                                    .smoothPressClickable(
-                                        pressScale = 0.96f,
-                                        onClick = { onInstanceSelect(instance) },
-                                    )
-                                    .clip(itemShape)
-                                    .background(itemBg)
-                                    .border(1.dp, itemBorder, itemShape)
-                                    .padding(horizontal = 12.dp, vertical = 11.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.Start,
+                                    .reorderableItem(
+                                        state = reorderState,
+                                        key = instance.id,
+                                        index = index,
+                                        enabled = instances.size > 1,
+                                        haptic = haptic,
+                                        soundPlayer = soundPlayer,
+                                    ),
                             ) {
-                                InstanceLoaderIcon(
-                                    loaderType = instance.loaderType,
-                                    contentDescription = instanceName,
-                                    defaultTint = itemContentColor,
-                                    modifier = Modifier.size(22.dp),
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                                    Text(
-                                        text = instanceName,
-                                        color = itemContentColor,
-                                        style = MaterialTheme.typography.bodyMedium.copy(
-                                            fontSize = 13.sp,
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                        ),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    Text(
-                                        text = instanceSubtitle,
-                                        color = colors.white.copy(alpha = 0.52f),
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.Medium,
-                                        ),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .smoothPressClickable(
+                                            pressScale = 0.96f,
+                                            onClick = {
+                                                if (reorderState.draggedIndex == null) {
+                                                    onInstanceSelect(instance)
+                                                }
+                                            },
+                                        )
+                                        .clip(itemShape)
+                                        .background(if (isDragging) colors.surfaceCardSelected else itemBg)
+                                        .border(
+                                            width = if (isDragging) 1.5.dp else 1.dp,
+                                            color = if (isDragging) colors.accent else itemBorder,
+                                            shape = itemShape,
+                                        )
+                                        .padding(horizontal = 12.dp, vertical = 11.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Row(
+                                        modifier = Modifier.weight(1f),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        InstanceLoaderIcon(
+                                            loaderType = instance.loaderType,
+                                            contentDescription = instanceName,
+                                            defaultTint = itemContentColor,
+                                            modifier = Modifier.size(22.dp),
+                                        )
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                                            Text(
+                                                text = instanceName,
+                                                color = itemContentColor,
+                                                style = MaterialTheme.typography.bodyMedium.copy(
+                                                    fontSize = 13.sp,
+                                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                                ),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            Text(
+                                                text = instanceSubtitle,
+                                                color = colors.white.copy(alpha = 0.52f),
+                                                style = MaterialTheme.typography.labelSmall.copy(
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.Medium,
+                                                ),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
+                                    }
+
+                                    Icon(
+                                        painter = painterResource(id = R.drawable.ic_drag_handle),
+                                        contentDescription = null,
+                                        tint = colors.iconMuted.copy(alpha = 0.40f),
+                                        modifier = Modifier.size(16.dp),
                                     )
                                 }
                             }

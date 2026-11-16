@@ -499,6 +499,11 @@ fun LauncherScreen(
     var activeInstallTask by remember { mutableStateOf<InstanceInstallTask?>(null) }
     var installSnapshot by remember { mutableStateOf<InstallProgressSnapshot?>(null) }
 
+    // Dynamic Island-style Microsoft Account Auth & Verification state
+    var activeAuthTask by remember { mutableStateOf<InstanceInstallTask?>(null) }
+    var authSnapshot by remember { mutableStateOf<InstallProgressSnapshot?>(null) }
+    var skinRefreshKey by remember { mutableIntStateOf(0) }
+
     // Dynamic Island-style Game Engine ProgressBar state (PREPARING_RUNTIME / PREPARING_RENDERER / BUILDING_SPEC)
     var activeEngineTask by remember { mutableStateOf<InstanceInstallTask?>(null) }
     var engineSnapshot by remember { mutableStateOf<InstallProgressSnapshot?>(null) }
@@ -508,7 +513,7 @@ fun LauncherScreen(
         engineStatus.state == GameEngineState.PREPARING_RENDERER ||
         engineStatus.state == GameEngineState.BUILDING_SPEC
 
-    val effectiveProgressTask: InstanceInstallTask? = activeInstallTask ?: activeEngineTask ?: if (isEnginePreparing) {
+    val effectiveProgressTask: InstanceInstallTask? = activeInstallTask ?: activeEngineTask ?: activeAuthTask ?: if (isEnginePreparing) {
         InstanceInstallTask(
             id = "engine_${engineStatus.state.name}",
             instanceName = engineStatus.activeInstanceName ?: engineStatus.activeRuntime?.displayName ?: "Runtime",
@@ -528,8 +533,12 @@ fun LauncherScreen(
     }
     val effectiveSnapshot: InstallProgressSnapshot? = if (activeInstallTask != null) {
         installSnapshot
+    } else if (activeEngineTask != null) {
+        engineSnapshot
+    } else if (activeAuthTask != null) {
+        authSnapshot
     } else {
-        engineSnapshot ?: if (isEnginePreparing) {
+        if (isEnginePreparing) {
             InstallProgressSnapshot(
                 progress = engineStatus.progress.coerceIn(0f, 1f),
                 currentFileName = "${engineStatus.state.name}: ${engineStatus.stageMessage}",
@@ -682,6 +691,188 @@ fun LauncherScreen(
     DisposableEffect(soundPlayer) {
         onDispose {
             soundPlayer?.release()
+        }
+    }
+
+    val startMicrosoftAuthVerification: (String) -> Unit = { code ->
+        coroutineScope.launch {
+            val authTaskId = "msa_auth_${System.currentTimeMillis()}"
+            activeAuthTask = InstanceInstallTask(
+                id = authTaskId,
+                instanceName = context.getString(R.string.microsoft_login_title),
+                loaderType = InstanceLoaderType.VANILLA,
+                mcVersion = "Authenticating…",
+                loaderVersion = null,
+                isInstanceInstall = false,
+                customStatusTitle = context.getString(R.string.microsoft_login_title),
+            )
+            authSnapshot = InstallProgressSnapshot(
+                progress = 0.15f,
+                currentFileName = context.getString(R.string.microsoft_verify_token),
+                downloadedMb = 0.15f,
+                totalMb = 1.0f,
+                speedMbPerSec = 0f,
+            )
+
+            MicrosoftAuthenticator.authenticateWithCode(code) { stepMessage, progress ->
+                authSnapshot = InstallProgressSnapshot(
+                    progress = progress,
+                    currentFileName = stepMessage,
+                    downloadedMb = progress,
+                    totalMb = 1.0f,
+                    speedMbPerSec = 0f,
+                )
+                activeAuthTask = activeAuthTask?.copy(
+                    mcVersion = stepMessage,
+                    customStatusTitle = stepMessage,
+                )
+            }.onSuccess { result ->
+                if (result.skinUrl != null) {
+                    authSnapshot = InstallProgressSnapshot(
+                        progress = 0.95f,
+                        currentFileName = context.getString(R.string.microsoft_syncing_skin),
+                        downloadedMb = 0.95f,
+                        totalMb = 1.0f,
+                        speedMbPerSec = 0f,
+                    )
+                    AccountSkinManager.downloadAndSaveSkin(context, result.uuid, result.skinUrl)
+                }
+
+                val existing = accounts.firstOrNull { it.uuid == result.uuid || it.username.equals(result.username, ignoreCase = true) }
+                val accountId = existing?.id ?: "ms_${result.uuid}"
+                val newAcc = LauncherAccount(
+                    id = accountId,
+                    username = result.username,
+                    typeRes = R.string.account_type_microsoft,
+                    uuid = result.uuid,
+                    accessToken = result.accessToken,
+                    msaRefreshToken = result.refreshToken,
+                )
+                val updatedAccounts = if (existing != null) {
+                    accounts.map { if (it.id == existing.id) newAcc else it }
+                } else {
+                    accounts + newAcc
+                }
+                accounts = updatedAccounts
+                selectedAccountId = newAcc.id
+                accountStore.saveAccounts(updatedAccounts)
+                accountStore.saveSelectedAccountId(newAcc.id)
+                skinRefreshKey++
+
+                authSnapshot = InstallProgressSnapshot(
+                    progress = 1.0f,
+                    currentFileName = context.getString(R.string.microsoft_login_success_named, result.username),
+                    downloadedMb = 1.0f,
+                    totalMb = 1.0f,
+                    speedMbPerSec = 0f,
+                )
+                delay(1200)
+                activeAuthTask = null
+                authSnapshot = null
+            }.onFailure { ex ->
+                Log.e("MicrosoftAuth", "Authentication failed", ex)
+                val errorMsg = ex.message ?: context.getString(R.string.microsoft_login_failed, "Unknown error")
+                authSnapshot = InstallProgressSnapshot(
+                    progress = 1.0f,
+                    currentFileName = errorMsg,
+                    downloadedMb = 1.0f,
+                    totalMb = 1.0f,
+                    speedMbPerSec = 0f,
+                )
+                Toast.makeText(context, errorMsg, Toast.LENGTH_LONG).show()
+                delay(2500)
+                activeAuthTask = null
+                authSnapshot = null
+            }
+        }
+    }
+
+    val refreshMicrosoftAccount: (LauncherAccount) -> Unit = { account ->
+        val refreshToken = account.msaRefreshToken
+        if (refreshToken.isNullOrBlank()) {
+            Toast.makeText(context, context.getString(R.string.microsoft_refresh_missing_token), Toast.LENGTH_SHORT).show()
+            isMicrosoftLoginOpen = true
+        } else {
+            coroutineScope.launch {
+                val refreshTaskId = "msa_refresh_${account.id}"
+                activeAuthTask = InstanceInstallTask(
+                    id = refreshTaskId,
+                    instanceName = account.username,
+                    loaderType = InstanceLoaderType.VANILLA,
+                    mcVersion = "Refreshing…",
+                    loaderVersion = null,
+                    isInstanceInstall = false,
+                    customStatusTitle = context.getString(R.string.microsoft_refreshing_title),
+                )
+                authSnapshot = InstallProgressSnapshot(
+                    progress = 0.15f,
+                    currentFileName = context.getString(R.string.microsoft_refresh_token_step),
+                    downloadedMb = 0.15f,
+                    totalMb = 1.0f,
+                    speedMbPerSec = 0f,
+                )
+
+                MicrosoftAuthenticator.refreshAccount(refreshToken) { stepMessage, progress ->
+                    authSnapshot = InstallProgressSnapshot(
+                        progress = progress,
+                        currentFileName = stepMessage,
+                        downloadedMb = progress,
+                        totalMb = 1.0f,
+                        speedMbPerSec = 0f,
+                    )
+                    activeAuthTask = activeAuthTask?.copy(
+                        mcVersion = stepMessage,
+                        customStatusTitle = stepMessage,
+                    )
+                }.onSuccess { result ->
+                    if (result.skinUrl != null) {
+                        authSnapshot = InstallProgressSnapshot(
+                            progress = 0.95f,
+                            currentFileName = context.getString(R.string.microsoft_syncing_skin),
+                            downloadedMb = 0.95f,
+                            totalMb = 1.0f,
+                            speedMbPerSec = 0f,
+                        )
+                        AccountSkinManager.downloadAndSaveSkin(context, result.uuid, result.skinUrl)
+                    }
+
+                    val updatedAccount = account.copy(
+                        username = result.username,
+                        uuid = result.uuid,
+                        accessToken = result.accessToken,
+                        msaRefreshToken = result.refreshToken ?: account.msaRefreshToken,
+                    )
+                    val updatedAccounts = accounts.map { if (it.id == account.id) updatedAccount else it }
+                    accounts = updatedAccounts
+                    accountStore.saveAccounts(updatedAccounts)
+                    skinRefreshKey++
+
+                    authSnapshot = InstallProgressSnapshot(
+                        progress = 1.0f,
+                        currentFileName = context.getString(R.string.microsoft_refresh_success),
+                        downloadedMb = 1.0f,
+                        totalMb = 1.0f,
+                        speedMbPerSec = 0f,
+                    )
+                    delay(1200)
+                    activeAuthTask = null
+                    authSnapshot = null
+                }.onFailure { ex ->
+                    Log.e("MicrosoftAuth", "Refresh failed", ex)
+                    val errorMsg = context.getString(R.string.microsoft_refresh_failed, ex.message ?: "Unknown error")
+                    authSnapshot = InstallProgressSnapshot(
+                        progress = 1.0f,
+                        currentFileName = errorMsg,
+                        downloadedMb = 1.0f,
+                        totalMb = 1.0f,
+                        speedMbPerSec = 0f,
+                    )
+                    Toast.makeText(context, errorMsg, Toast.LENGTH_LONG).show()
+                    delay(2500)
+                    activeAuthTask = null
+                    authSnapshot = null
+                }
+            }
         }
     }
 
@@ -930,9 +1121,11 @@ fun LauncherScreen(
                     dialogInputText = account.username
                     activeDialog = LauncherDialog.RenameAccount(account)
                 },
+                onRefreshAccount = refreshMicrosoftAccount,
                 onRemoveAccount = { account ->
                     activeDialog = LauncherDialog.ConfirmRemoveAccount(account)
                 },
+                skinRefreshKey = skinRefreshKey,
                 accentColor = accentColor,
                 isImportingBackground = isImportingBackground,
                 backgroundImportError = backgroundImportError,
@@ -995,6 +1188,8 @@ fun LauncherScreen(
                         activeDialog = LauncherDialog.AddInstance
                     },
                     activeUsername = activeUsername,
+                    activeAccount = selectedAccount,
+                    skinRefreshKey = skinRefreshKey,
                     isChangePanelOpen = isChangePanelOpen,
                     onChangeToggle = { isChangePanelOpen = !isChangePanelOpen },
                     isSuspended = activeDialog != null,
@@ -1159,6 +1354,10 @@ fun LauncherScreen(
                             if (activeInstallTask != null) {
                                 activeInstallTask = null
                                 installSnapshot = null
+                            }
+                            if (activeAuthTask != null) {
+                                activeAuthTask = null
+                                authSnapshot = null
                             }
                             if (activeEngineTask != null || isEnginePreparing || activeEngineLaunchJob != null) {
                                 activeEngineLaunchJob?.cancel()
@@ -1358,36 +1557,9 @@ fun LauncherScreen(
         if (isMicrosoftLoginOpen) {
             MicrosoftLoginScreen(
                 onClose = { isMicrosoftLoginOpen = false },
-                onSuccess = { authResult ->
-                    val existing = accounts.firstOrNull { it.username.equals(authResult.username, ignoreCase = true) }
-                    val accountId = existing?.id ?: "ms_${authResult.uuid}"
-                    val newAcc = LauncherAccount(
-                        id = accountId,
-                        username = authResult.username,
-                        typeRes = R.string.account_type_microsoft,
-                        uuid = authResult.uuid,
-                        accessToken = authResult.accessToken,
-                        msaRefreshToken = authResult.refreshToken,
-                    )
-                    accounts = if (existing != null) {
-                        accounts.map { if (it.id == existing.id) newAcc else it }
-                    } else {
-                        accounts + newAcc
-                    }
-                    selectedAccountId = newAcc.id
+                onCodeCaptured = { code ->
                     isMicrosoftLoginOpen = false
-                    Toast.makeText(
-                        context,
-                        context.getString(R.string.microsoft_login_success, authResult.username),
-                        Toast.LENGTH_SHORT,
-                    ).show()
-                },
-                onError = { errorMsg ->
-                    Toast.makeText(
-                        context,
-                        context.getString(R.string.microsoft_login_failed, errorMsg),
-                        Toast.LENGTH_LONG,
-                    ).show()
+                    startMicrosoftAuthVerification(code)
                 },
             )
         }
@@ -1902,24 +2074,17 @@ private fun AccountTypeOptionCard(
 @Composable
 private fun MicrosoftLoginScreen(
     onClose: () -> Unit,
-    onSuccess: (MicrosoftAuthResult) -> Unit,
-    onError: (String) -> Unit,
+    onCodeCaptured: (String) -> Unit,
 ) {
     val colors = LauncherTheme.colors
-    val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
-    var isAuthenticating by remember { mutableStateOf(false) }
-    var authStepText by remember { mutableStateOf(context.getString(R.string.microsoft_login_loading)) }
     var isLoadingPage by remember { mutableStateOf(true) }
 
     BackHandler(enabled = true) {
-        if (!isAuthenticating) {
-            if (webViewRef?.canGoBack() == true) {
-                webViewRef?.goBack()
-            } else {
-                onClose()
-            }
+        if (webViewRef?.canGoBack() == true) {
+            webViewRef?.goBack()
+        } else {
+            onClose()
         }
     }
 
@@ -1936,205 +2101,97 @@ private fun MicrosoftLoginScreen(
             .fillMaxSize()
             .background(Color(0xFF1E1E1E)),
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            // Top App Bar
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(52.dp)
-                    .background(colors.dialogSurface)
-                    .border(1.dp, colors.borderSubtle, RectangleShape)
-                    .padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                // Left: Back/Close button + Microsoft Logo + Title
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(34.dp)
-                            .smoothPressClickable(
-                                pressScale = 0.92f,
-                                enabled = !isAuthenticating,
-                                onClick = onClose,
-                            )
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(colors.surfaceButtonSubtle)
-                            .border(1.dp, colors.borderButton, RoundedCornerShape(10.dp)),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            painter = painterResource(id = R.drawable.ic_close_chevron),
-                            contentDescription = stringResource(R.string.action_cancel),
-                            tint = colors.textPrimary,
-                            modifier = Modifier.size(16.dp),
-                        )
+        // Full-screen WebView
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { ctx ->
+                WebView(ctx).apply {
+                    layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    )
+                    settings.apply {
+                        javaScriptEnabled = true
+                        domStorageEnabled = true
+                        cacheMode = WebSettings.LOAD_NO_CACHE
+                        useWideViewPort = true
+                        loadWithOverviewMode = true
+                        setSupportZoom(true)
+                        builtInZoomControls = true
+                        displayZoomControls = false
+                        userAgentString = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
                     }
+                    CookieManager.getInstance().removeAllCookies(null)
+                    CookieManager.getInstance().flush()
+                    clearHistory()
+                    clearCache(true)
+                    clearFormData()
 
-                    Icon(
-                        painter = painterResource(id = R.drawable.ic_microsoft),
-                        contentDescription = null,
-                        tint = Color.Unspecified,
-                        modifier = Modifier.size(20.dp),
-                    )
-
-                    Text(
-                        text = stringResource(R.string.microsoft_login_title),
-                        color = colors.textPrimary,
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                        ),
-                    )
-                }
-
-                // Right: Reload button
-                Box(
-                    modifier = Modifier
-                        .size(34.dp)
-                        .smoothPressClickable(
-                            pressScale = 0.92f,
-                            enabled = !isAuthenticating,
-                            onClick = { webViewRef?.reload() },
-                        )
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(colors.surfaceButtonSubtle)
-                        .border(1.dp, colors.borderButton, RoundedCornerShape(10.dp)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        painter = painterResource(id = R.drawable.ic_change),
-                        contentDescription = "Reload",
-                        tint = colors.textPrimary,
-                        modifier = Modifier.size(16.dp),
-                    )
-                }
-            }
-
-            // Page Loading Progress Bar
-            if (isLoadingPage && !isAuthenticating) {
-                LinearProgressIndicator(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(2.dp),
-                    color = colors.accent,
-                    trackColor = colors.transparent,
-                )
-            }
-
-            // Full-screen WebView
-            AndroidView(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                factory = { ctx ->
-                    WebView(ctx).apply {
-                        layoutParams = ViewGroup.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                        )
-                        settings.apply {
-                            javaScriptEnabled = true
-                            domStorageEnabled = true
-                            cacheMode = WebSettings.LOAD_NO_CACHE
-                            useWideViewPort = true
-                            loadWithOverviewMode = true
-                            setSupportZoom(true)
-                            builtInZoomControls = true
-                            displayZoomControls = false
-                            userAgentString = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
-                        }
-                        CookieManager.getInstance().removeAllCookies(null)
-                        CookieManager.getInstance().flush()
-                        clearHistory()
-                        clearCache(true)
-                        clearFormData()
-
-                        webViewClient = object : WebViewClient() {
-                            override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
-                                if (MicrosoftAuthenticator.isRedirectUrl(url)) {
-                                    val code = MicrosoftAuthenticator.extractCode(url)
-                                    if (!code.isNullOrBlank()) {
-                                        isAuthenticating = true
-                                        authStepText = context.getString(R.string.microsoft_login_loading)
-                                        coroutineScope.launch {
-                                            val result = MicrosoftAuthenticator.authenticateWithCode(code)
-                                            result.onSuccess { authResult ->
-                                                onSuccess(authResult)
-                                            }.onFailure { ex ->
-                                                isAuthenticating = false
-                                                onError(ex.message ?: "Authentication failed")
-                                            }
-                                        }
-                                        return true
-                                    }
-                                    if (url.contains("error=") || url.contains("res=cancel")) {
-                                        onClose()
-                                        return true
-                                    }
+                    webViewClient = object : WebViewClient() {
+                        override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
+                            if (MicrosoftAuthenticator.isRedirectUrl(url)) {
+                                val code = MicrosoftAuthenticator.extractCode(url)
+                                if (!code.isNullOrBlank()) {
+                                    view.stopLoading()
+                                    onCodeCaptured(code)
+                                    return true
                                 }
-                                return false
+                                if (url.contains("error=") || url.contains("res=cancel")) {
+                                    onClose()
+                                    return true
+                                }
                             }
-
-                            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                                isLoadingPage = true
-                            }
-
-                            override fun onPageFinished(view: WebView?, url: String?) {
-                                isLoadingPage = false
-                            }
+                            return false
                         }
 
-                        loadUrl(MicrosoftAuthenticator.LOGIN_URL)
-                        webViewRef = this
+                        override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                            isLoadingPage = true
+                        }
+
+                        override fun onPageFinished(view: WebView?, url: String?) {
+                            isLoadingPage = false
+                        }
                     }
-                },
+
+                    loadUrl(MicrosoftAuthenticator.LOGIN_URL)
+                    webViewRef = this
+                }
+            },
+        )
+
+        // Page Loading Progress Bar at top edge
+        if (isLoadingPage) {
+            LinearProgressIndicator(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .align(Alignment.TopCenter),
+                color = colors.accent,
+                trackColor = colors.transparent,
             )
         }
 
-        // Full screen authentication loading overlay when tokens are being exchanged
-        if (isAuthenticating) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color(0xD9000000))
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = {},
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                val modalShape = RoundedCornerShape(18.dp)
-                Column(
-                    modifier = Modifier
-                        .width(280.dp)
-                        .clip(modalShape)
-                        .background(colors.dialogSurface)
-                        .border(1.dp, colors.borderModal, modalShape)
-                        .padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(36.dp),
-                        color = colors.accent,
-                        strokeWidth = 3.dp,
-                    )
-                    Text(
-                        text = authStepText,
-                        color = colors.textPrimary,
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                        ),
-                        textAlign = TextAlign.Center,
-                    )
-                }
-            }
+        // Floating Close Button at top-right
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 16.dp, end = 16.dp)
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(Color(0x99000000))
+                .border(1.dp, Color(0x33FFFFFF), CircleShape)
+                .smoothPressClickable(
+                    pressScale = 0.90f,
+                    onClick = onClose,
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                painter = painterResource(id = R.drawable.ic_close_chevron),
+                contentDescription = stringResource(R.string.action_cancel),
+                tint = Color.White,
+                modifier = Modifier.size(16.dp),
+            )
         }
     }
 }
@@ -3978,7 +4035,9 @@ fun UnifiedLeftRailAndPanel(
     onAccountSelect: (LauncherAccount) -> Unit,
     onAddAccountClick: () -> Unit,
     onRequestRenameAccount: (LauncherAccount) -> Unit,
+    onRefreshAccount: (LauncherAccount) -> Unit = {},
     onRemoveAccount: (LauncherAccount) -> Unit,
+    skinRefreshKey: Int = 0,
     accentColor: Color,
     isImportingBackground: Boolean,
     backgroundImportError: String?,
@@ -4152,7 +4211,9 @@ fun UnifiedLeftRailAndPanel(
                                     onAccountSelect = onAccountSelect,
                                     onAddAccountClick = onAddAccountClick,
                                     onRequestRenameAccount = onRequestRenameAccount,
+                                    onRefreshAccount = onRefreshAccount,
                                     onRemoveAccount = onRemoveAccount,
+                                    skinRefreshKey = skinRefreshKey,
                                     isSuspended = isSuspended,
                                 )
                                 LauncherDestination.SETTINGS -> SettingsPanelContent(
@@ -4436,7 +4497,9 @@ private fun AccountPanelContent(
     onAccountSelect: (LauncherAccount) -> Unit,
     onAddAccountClick: () -> Unit,
     onRequestRenameAccount: (LauncherAccount) -> Unit,
+    onRefreshAccount: (LauncherAccount) -> Unit = {},
     onRemoveAccount: (LauncherAccount) -> Unit,
+    skinRefreshKey: Int = 0,
     isSuspended: Boolean = false,
 ) {
     val colors = LauncherTheme.colors
@@ -4445,11 +4508,8 @@ private fun AccountPanelContent(
         accounts.firstOrNull { it.id == selectedAccountId } ?: accounts.firstOrNull()
     }
     val hasAccount = selectedAccount != null
-    val accountSkin = remember {
-        runCatching { SkinUtils.fromAsset(context, SKIN_ASSET) }
-            .mapCatching { SkinUtils.toClassicModel(SkinUtils.normalizeSkin(it)) }
-            .onFailure { Log.w("AccountPanel", "No usable $SKIN_ASSET, using default skin", it) }
-            .getOrElse { DefaultSkin.create() }
+    val accountSkin = remember(selectedAccount?.id, skinRefreshKey) {
+        AccountSkinManager.loadSkin(context, selectedAccount)
     }
     // No account -> the account skin, grayed out and converted to the classic model. No capes.
     val skin = if (hasAccount) accountSkin else rememberNoAccountSkin()
@@ -4621,8 +4681,11 @@ private fun AccountPanelContent(
                                         modifier = Modifier.weight(1f),
                                         verticalAlignment = Alignment.CenterVertically,
                                     ) {
+                                        val itemSkinHead = remember(account.id, skinRefreshKey) {
+                                            extractSkinHeadBitmap(AccountSkinManager.loadSkin(context, account))
+                                        }
                                         Image(
-                                            bitmap = skinHeadBitmap,
+                                            bitmap = itemSkinHead,
                                             contentDescription = account.username,
                                             filterQuality = FilterQuality.None,
                                             contentScale = ContentScale.FillBounds,
@@ -4703,30 +4766,58 @@ private fun AccountPanelContent(
                                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                                             ) {
                                                 val actionShape = RoundedCornerShape(10.dp)
-                                                // Rename option
-                                                Box(
-                                                    modifier = Modifier
-                                                        .smoothPressClickable(
-                                                            pressScale = 0.92f,
-                                                            onClick = {
-                                                                openOptionsAccountId = null
-                                                                onRequestRenameAccount(account)
-                                                            },
+                                                if (account.typeRes == R.string.account_type_microsoft) {
+                                                    // Refresh option for Microsoft accounts
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .smoothPressClickable(
+                                                                pressScale = 0.92f,
+                                                                onClick = {
+                                                                    openOptionsAccountId = null
+                                                                    onRefreshAccount(account)
+                                                                },
+                                                            )
+                                                            .clip(actionShape)
+                                                            .background(colors.surfaceBadge)
+                                                            .border(1.dp, colors.white.copy(alpha = 0.30f), actionShape)
+                                                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                                                        contentAlignment = Alignment.Center,
+                                                    ) {
+                                                        Text(
+                                                            text = stringResource(R.string.action_refresh),
+                                                            color = colors.textPrimary,
+                                                            style = MaterialTheme.typography.labelMedium.copy(
+                                                                fontSize = 12.sp,
+                                                                fontWeight = FontWeight.SemiBold,
+                                                            ),
                                                         )
-                                                        .clip(actionShape)
-                                                        .background(colors.surfaceBadge)
-                                                        .border(1.dp, colors.white.copy(alpha = 0.30f), actionShape)
-                                                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                                                    contentAlignment = Alignment.Center,
-                                                ) {
-                                                    Text(
-                                                        text = stringResource(R.string.action_rename),
-                                                        color = colors.textPrimary,
-                                                        style = MaterialTheme.typography.labelMedium.copy(
-                                                            fontSize = 12.sp,
-                                                            fontWeight = FontWeight.SemiBold,
-                                                        ),
-                                                    )
+                                                    }
+                                                } else {
+                                                    // Rename option for Offline accounts
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .smoothPressClickable(
+                                                                pressScale = 0.92f,
+                                                                onClick = {
+                                                                    openOptionsAccountId = null
+                                                                    onRequestRenameAccount(account)
+                                                                },
+                                                            )
+                                                            .clip(actionShape)
+                                                            .background(colors.surfaceBadge)
+                                                            .border(1.dp, colors.white.copy(alpha = 0.30f), actionShape)
+                                                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                                                        contentAlignment = Alignment.Center,
+                                                    ) {
+                                                        Text(
+                                                            text = stringResource(R.string.action_rename),
+                                                            color = colors.textPrimary,
+                                                            style = MaterialTheme.typography.labelMedium.copy(
+                                                                fontSize = 12.sp,
+                                                                fontWeight = FontWeight.SemiBold,
+                                                            ),
+                                                        )
+                                                    }
                                                 }
 
                                                 // Remove option
@@ -4848,16 +4939,15 @@ fun RightPlayAndSkinPanel(
     backgroundRootOffset: Offset = Offset.Zero,
     backgroundFrameTick: () -> Int = { 0 },
     isSuspended: Boolean = false,
+    activeAccount: LauncherAccount? = null,
+    skinRefreshKey: Int = 0,
 ) {
     val colors = LauncherTheme.colors
     val context = LocalContext.current
     // No account -> the account skin grayed out in the classic model; capes are never shown.
     val hasAccount = activeUsername.isNotBlank()
-    val accountSkin = remember {
-        runCatching { SkinUtils.fromAsset(context, SKIN_ASSET) }
-            .mapCatching { SkinUtils.toClassicModel(SkinUtils.normalizeSkin(it)) }
-            .onFailure { Log.w("LauncherScreen", "No usable $SKIN_ASSET, using default skin", it) }
-            .getOrElse { DefaultSkin.create() }
+    val accountSkin = remember(activeAccount?.id, skinRefreshKey) {
+        AccountSkinManager.loadSkin(context, activeAccount)
     }
     val skin = if (hasAccount) accountSkin else rememberNoAccountSkin()
     val cape: Bitmap? = null

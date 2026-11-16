@@ -66,6 +66,7 @@
     <string name="dialog_confirm_remove_instance_title">Remove Instance</string>
     <string name="dialog_confirm_remove_instance_message">Delete instance \"%1$s\" and its files?</string>
     <string name="action_rename">Rename</string>
+    <string name="action_refresh">Refresh</string>
     <string name="action_remove">Remove</string>
     <string name="action_more_options">More options</string>
     <string name="action_cancel">Cancel</string>
@@ -85,8 +86,16 @@
     <string name="dialog_add_offline_account_title">Add Offline Account</string>
     <string name="microsoft_login_title">Microsoft Login</string>
     <string name="microsoft_login_loading">Signing in with Microsoft…</string>
+    <string name="microsoft_verify_token">Exchanging Microsoft authorization…</string>
+    <string name="microsoft_syncing_skin">Syncing official Minecraft skin…</string>
     <string name="microsoft_login_success">Logged in as %1$s</string>
+    <string name="microsoft_login_success_named">Logged in as %1$s</string>
     <string name="microsoft_login_failed">Microsoft login failed: %1$s</string>
+    <string name="microsoft_refreshing_title">Refreshing Microsoft Account</string>
+    <string name="microsoft_refresh_token_step">Refreshing authorization token…</string>
+    <string name="microsoft_refresh_success">Account refreshed successfully</string>
+    <string name="microsoft_refresh_failed">Failed to refresh account: %1$s</string>
+    <string name="microsoft_refresh_missing_token">Please re-login to your Microsoft account</string>
 
     <!-- Game Engine & Settings -->
     <string name="settings_category_display_renderer">Display and Renderer</string>

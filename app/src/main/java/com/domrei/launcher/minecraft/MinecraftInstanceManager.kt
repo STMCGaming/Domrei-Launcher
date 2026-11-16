@@ -43,7 +43,7 @@ data class InstallProgressSnapshot(
     val downloadedMb: Float,
     val totalMb: Float,
     val speedMbPerSec: Float,
-    val files: List<DownloadFileItem>,
+    val files: List<DownloadFileItem> = emptyList(),
     val isComplete: Boolean = false,
     val errorMessage: String? = null,
 )

@@ -4426,6 +4426,7 @@ private fun InstancesPanelContent(
             val soundPlayer = LocalLauncherSoundPlayer.current
             val reorderState = rememberReorderableState(
                 listState = lazyListState,
+                totalItemsCount = { instances.size },
                 onMove = { from, to -> onReorderInstances(instances.reorder(from, to)) },
             )
 
@@ -4486,7 +4487,7 @@ private fun InstancesPanelContent(
                                 .smoothPressClickable(
                                     pressScale = 0.98f,
                                     onClick = {
-                                        if (reorderState.draggedIndex == null) {
+                                        if (!reorderState.isDragging && !reorderState.justFinishedDrag) {
                                             onInstanceSelect(instance)
                                         }
                                     },
@@ -4537,39 +4538,27 @@ private fun InstancesPanelContent(
                                 }
                             }
 
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                Icon(
-                                    painter = painterResource(id = R.drawable.ic_drag_handle),
-                                    contentDescription = null,
-                                    tint = colors.iconMuted.copy(alpha = 0.40f),
-                                    modifier = Modifier.size(16.dp),
-                                )
-
-                                val removeShape = RoundedCornerShape(10.dp)
-                                Box(
-                                    modifier = Modifier
-                                        .smoothPressClickable(
-                                            pressScale = 0.92f,
-                                            onClick = { onRemoveInstance(instance) },
-                                        )
-                                        .clip(removeShape)
-                                        .background(colors.errorContainer)
-                                        .border(1.dp, colors.errorBorderStrong, removeShape)
-                                        .padding(horizontal = 10.dp, vertical = 5.dp),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Text(
-                                        text = stringResource(R.string.action_remove),
-                                        color = colors.errorText,
-                                        style = MaterialTheme.typography.labelMedium.copy(
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                        ),
+                            val removeShape = RoundedCornerShape(10.dp)
+                            Box(
+                                modifier = Modifier
+                                    .smoothPressClickable(
+                                        pressScale = 0.92f,
+                                        onClick = { onRemoveInstance(instance) },
                                     )
-                                }
+                                    .clip(removeShape)
+                                    .background(colors.errorContainer)
+                                    .border(1.dp, colors.errorBorderStrong, removeShape)
+                                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.action_remove),
+                                    color = colors.errorText,
+                                    style = MaterialTheme.typography.labelMedium.copy(
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                    ),
+                                )
                             }
                         }
                     }
@@ -4748,6 +4737,7 @@ private fun AccountPanelContent(
                 val soundPlayer = LocalLauncherSoundPlayer.current
                 val reorderState = rememberReorderableState(
                     listState = lazyListState,
+                    totalItemsCount = { accounts.size },
                     onMove = { from, to -> onReorderAccounts(accounts.reorder(from, to)) },
                     onDragStart = { openOptionsAccountId = null },
                 )
@@ -4821,7 +4811,7 @@ private fun AccountPanelContent(
                                         .smoothPressClickable(
                                             pressScale = 0.98f,
                                             onClick = {
-                                                if (reorderState.draggedIndex == null) {
+                                                if (!reorderState.isDragging && !reorderState.justFinishedDrag) {
                                                     openOptionsAccountId = null
                                                     onAccountSelect(account)
                                                 }
@@ -5034,14 +5024,6 @@ private fun AccountPanelContent(
                                                 .graphicsLayer { rotationZ = moreBtnRotation },
                                         )
                                     }
-
-                                    // Subtle drag handle icon
-                                    Icon(
-                                        painter = painterResource(id = R.drawable.ic_drag_handle),
-                                        contentDescription = null,
-                                        tint = colors.iconMuted.copy(alpha = 0.40f),
-                                        modifier = Modifier.size(16.dp),
-                                    )
                                 }
                             }
                         }
@@ -5315,6 +5297,7 @@ fun RightPlayAndSkinPanel(
                     val soundPlayer = LocalLauncherSoundPlayer.current
                     val reorderState = rememberReorderableState(
                         listState = lazyListState,
+                        totalItemsCount = { instances.size },
                         onMove = { from, to -> onReorderInstances(instances.reorder(from, to)) },
                     )
 
@@ -5378,7 +5361,7 @@ fun RightPlayAndSkinPanel(
                                         .smoothPressClickable(
                                             pressScale = 0.96f,
                                             onClick = {
-                                                if (reorderState.draggedIndex == null) {
+                                                if (!reorderState.isDragging && !reorderState.justFinishedDrag) {
                                                     onInstanceSelect(instance)
                                                 }
                                             },
@@ -5392,49 +5375,37 @@ fun RightPlayAndSkinPanel(
                                         )
                                         .padding(horizontal = 12.dp, vertical = 11.dp),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    horizontalArrangement = Arrangement.Start,
                                 ) {
-                                    Row(
-                                        modifier = Modifier.weight(1f),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        InstanceLoaderIcon(
-                                            loaderType = instance.loaderType,
-                                            contentDescription = instanceName,
-                                            defaultTint = itemContentColor,
-                                            modifier = Modifier.size(22.dp),
-                                        )
-                                        Spacer(modifier = Modifier.width(10.dp))
-                                        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                                            Text(
-                                                text = instanceName,
-                                                color = itemContentColor,
-                                                style = MaterialTheme.typography.bodyMedium.copy(
-                                                    fontSize = 13.sp,
-                                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                                ),
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                            )
-                                            Text(
-                                                text = instanceSubtitle,
-                                                color = colors.white.copy(alpha = 0.52f),
-                                                style = MaterialTheme.typography.labelSmall.copy(
-                                                    fontSize = 10.sp,
-                                                    fontWeight = FontWeight.Medium,
-                                                ),
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                            )
-                                        }
-                                    }
-
-                                    Icon(
-                                        painter = painterResource(id = R.drawable.ic_drag_handle),
-                                        contentDescription = null,
-                                        tint = colors.iconMuted.copy(alpha = 0.40f),
-                                        modifier = Modifier.size(16.dp),
+                                    InstanceLoaderIcon(
+                                        loaderType = instance.loaderType,
+                                        contentDescription = instanceName,
+                                        defaultTint = itemContentColor,
+                                        modifier = Modifier.size(22.dp),
                                     )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                                        Text(
+                                            text = instanceName,
+                                            color = itemContentColor,
+                                            style = MaterialTheme.typography.bodyMedium.copy(
+                                                fontSize = 13.sp,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                            ),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        Text(
+                                            text = instanceSubtitle,
+                                            color = colors.white.copy(alpha = 0.52f),
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Medium,
+                                            ),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
                                 }
                             }
                         }

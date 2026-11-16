@@ -60,6 +60,7 @@ class MinecraftInstanceManager(
 
     private val instancesDir: File get() = File(rootDir, "instances")
     private val instancesIndexFile: File get() = File(instancesDir, "instances.json")
+    private val selectedInstanceFile: File get() = File(instancesDir, "selected_instance.txt")
 
     init {
         ensureBaseDirectories()
@@ -144,6 +145,21 @@ class MinecraftInstanceManager(
         }
         val remaining = loadInstances().filterNot { it.id == instanceId }
         writeInstancesIndex(remaining)
+        if (loadSelectedInstanceId() == instanceId) {
+            saveSelectedInstanceId(remaining.firstOrNull()?.id.orEmpty())
+        }
+    }
+
+    /** ID of the instance the user last selected, persisted next to the instance index. */
+    fun loadSelectedInstanceId(): String = runCatching {
+        if (selectedInstanceFile.isFile) selectedInstanceFile.readText(Charsets.UTF_8).trim() else ""
+    }.getOrDefault("")
+
+    fun saveSelectedInstanceId(instanceId: String) {
+        runCatching {
+            if (!instancesDir.exists()) instancesDir.mkdirs()
+            writeTextAtomic(selectedInstanceFile, instanceId)
+        }
     }
 
     private fun writeInstancesIndex(instances: List<LauncherInstance>) {

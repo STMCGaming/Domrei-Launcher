@@ -4,7 +4,10 @@ import android.graphics.Bitmap
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
@@ -42,6 +45,9 @@ fun rememberSkinViewerController(): SkinViewerController = remember { SkinViewer
  * @param nameTag optional floating Minecraft nametag above player head.
  * @param config every visual/behavior option; see [SkinViewerConfig].
  * @param controller optional handle for imperative control.
+ * @param paused temporarily stops rendering (e.g. while a dialog covers the screen) without
+ *   destroying the GL surface. Combined with the host lifecycle, so resuming the app does not
+ *   override an explicit pause.
  */
 @Composable
 fun SkinViewer(
@@ -51,6 +57,7 @@ fun SkinViewer(
     nameTag: String? = null,
     config: SkinViewerConfig = SkinViewerConfig(),
     controller: SkinViewerController? = null,
+    paused: Boolean = false,
 ) {
     val effectiveConfig = remember(config, nameTag) {
         if (nameTag != null) config.copy(nameTag = nameTag) else config
@@ -58,12 +65,14 @@ fun SkinViewer(
     val defaultSkin = remember { DefaultSkin.create() }
     val holder = remember { arrayOfNulls<SkinView>(1) }
     val lifecycleOwner = LocalLifecycleOwner.current
+    var lifecycleResumed by remember { mutableStateOf(true) }
+    val isPaused = paused || !lifecycleResumed
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> holder[0]?.onResume()
-                Lifecycle.Event.ON_PAUSE -> holder[0]?.onPause()
+                Lifecycle.Event.ON_RESUME -> lifecycleResumed = true
+                Lifecycle.Event.ON_PAUSE -> lifecycleResumed = false
                 else -> Unit
             }
         }
@@ -78,6 +87,7 @@ fun SkinViewer(
                 it.config = effectiveConfig
                 it.setSkin(skin ?: defaultSkin)
                 it.setCape(cape)
+                it.setPaused(isPaused)
                 holder[0] = it
             }
         },
@@ -85,6 +95,7 @@ fun SkinViewer(
             view.config = effectiveConfig
             view.setSkin(skin ?: defaultSkin)
             view.setCape(cape)
+            view.setPaused(isPaused)
             controller?.view = view
         },
         onRelease = { view ->

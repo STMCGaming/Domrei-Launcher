@@ -1,5 +1,6 @@
 <resources>
     <string name="app_name">Domrei Launcher</string>
+    <string name="splash_preparing">Preparing launcher…</string>
 
     <!-- Navigation Rail -->
     <string name="nav_instances">Instances</string>
@@ -29,6 +30,9 @@
     <string name="select_minecraft_version">Select Minecraft Version</string>
     <string name="select_loader_version">Select Fabric Loader Version</string>
     <string name="enter_instance_name">Enter Instance Name</string>
+    <string name="instance_name_duplicate">An instance with this name already exists</string>
+    <string name="label_instance_name">Instance name</string>
+    <string name="label_username">Username</string>
     <string name="instance_fabric_short_format">Fabric %1$s</string>
     <string name="version_filter_release">Release</string>
     <string name="version_filter_snapshot">Snapshot</string>
@@ -76,13 +80,22 @@
     <string name="default_account_alex">Alex</string>
     <string name="account_type_microsoft">Microsoft Account</string>
     <string name="account_type_offline">Offline Account</string>
+    <string name="account_type_offline_name">Offline</string>
+    <string name="account_type_microsoft_name">Microsoft</string>
+    <string name="dialog_add_offline_account_title">Add Offline Account</string>
+    <string name="microsoft_login_title">Microsoft Login</string>
+    <string name="microsoft_login_loading">Signing in with Microsoft…</string>
+    <string name="microsoft_login_success">Logged in as %1$s</string>
+    <string name="microsoft_login_failed">Microsoft login failed: %1$s</string>
 
     <!-- Game Engine & Settings -->
     <string name="settings_category_display_renderer">Display and Renderer</string>
     <string name="settings_category_java_tweak">Java Tweak</string>
     <string name="settings_category_controls">Controls</string>
     <string name="settings_category_appearance">Appearance</string>
-    <string name="settings_bg_title">Custom Background</string>
+    <string name="settings_bg_title">Background</string>
+    <string name="dialog_username_invalid">Use 3-16 letters, numbers or _</string>
+    <string name="dialog_username_taken">That name already exists</string>
     <string name="settings_bg_pick_media">Image / Video</string>
     <string name="settings_bg_importing">Importing media…</string>
     <string name="settings_bg_import_failed">Could not load selected file</string>

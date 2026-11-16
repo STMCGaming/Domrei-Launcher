@@ -21,6 +21,24 @@ object DefaultSkin {
         val shoes: Int = 0xFF5A5A5A.toInt(),
     )
 
+    /** Muted grayscale palette used when no account is signed in. */
+    val PlaceholderPalette = Palette(
+        skin = 0xFFBDBDBD.toInt(),
+        skinShade = 0xFF9E9E9E.toInt(),
+        hair = 0xFF757575.toInt(),
+        eyeWhite = 0xFFE0E0E0.toInt(),
+        eye = 0xFF616161.toInt(),
+        mouth = 0xFF8A8A8A.toInt(),
+        shirt = 0xFFA6A6A6.toInt(),
+        shirtShade = 0xFF8E8E8E.toInt(),
+        pants = 0xFF949494.toInt(),
+        pantsShade = 0xFF7E7E7E.toInt(),
+        shoes = 0xFF6B6B6B.toInt(),
+    )
+
+    /** Creates the gray "no account" placeholder: classic (4px) arms. */
+    fun createPlaceholder(): Bitmap = create(slim = false, palette = PlaceholderPalette)
+
     /** Creates a 64x64 skin. */
     fun create(slim: Boolean = false, palette: Palette = Palette()): Bitmap {
         val px = IntArray(64 * 64) // fully transparent

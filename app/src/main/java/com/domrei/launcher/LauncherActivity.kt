@@ -8,8 +8,15 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.view.ViewGroup
 import android.view.WindowManager
+import android.webkit.CookieManager
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -80,6 +87,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -109,6 +117,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.asImageBitmap
@@ -132,6 +141,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Constraints
@@ -139,9 +149,11 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 import com.domrei.gameengine.DomreiGameEngine
 import com.domrei.gameengine.GameEngineState
@@ -332,10 +344,14 @@ data class LauncherAccount(
     val id: String,
     val username: String,
     @StringRes val typeRes: Int = R.string.account_type_offline,
+    val uuid: String? = null,
+    val accessToken: String? = null,
+    val msaRefreshToken: String? = null,
 )
 
 sealed interface LauncherDialog {
-    data object AddAccount : LauncherDialog
+    data object ChooseAccountType : LauncherDialog
+    data object AddOfflineAccount : LauncherDialog
     data class RenameAccount(val account: LauncherAccount) : LauncherDialog
     data class ConfirmRemoveAccount(val account: LauncherAccount) : LauncherDialog
     data class ConfirmRemoveInstance(val instance: LauncherInstance) : LauncherDialog
@@ -545,6 +561,7 @@ fun LauncherScreen(
         displayedDialog = activeDialog
     }
     var dialogInputText by remember { mutableStateOf("") }
+    var isMicrosoftLoginOpen by remember { mutableStateOf(false) }
 
     // Smoothly animate full-screen blur radius when any dialog opens or closes
     val dialogBlurRadius by animateDpAsState(
@@ -785,8 +802,7 @@ fun LauncherScreen(
                 selectedAccountId = selectedAccountId,
                 onAccountSelect = { account -> selectedAccountId = account.id },
                 onAddAccountClick = {
-                    dialogInputText = context.getString(R.string.default_new_player_format, nextAccountCounter)
-                    activeDialog = LauncherDialog.AddAccount
+                    activeDialog = LauncherDialog.ChooseAccountType
                 },
                 onRequestRenameAccount = { account ->
                     dialogInputText = account.username
@@ -888,6 +904,8 @@ fun LauncherScreen(
                                         minecraftRootDir = instanceManager.rootDir,
                                         instanceGameDir = instanceManager.gameDirFor(targetInstance.id),
                                         username = activeUsername,
+                                        uuid = selectedAccount?.uuid ?: GameLaunchRequest.generateOfflineUuid(activeUsername),
+                                        accessToken = selectedAccount?.accessToken ?: "0",
                                         preferredRenderer = selectedRenderer,
                                     )
                                     val launchResult = gameEngine.launchGame(
@@ -1105,9 +1123,24 @@ fun LauncherScreen(
                         },
                     )
                 }
-                is LauncherDialog.AddAccount -> {
+                is LauncherDialog.ChooseAccountType -> {
+                    ChooseAccountTypeDialogContent(
+                        onCancel = { activeDialog = null },
+                        onSelectOffline = {
+                            val num = nextAccountCounter++
+                            dialogInputText = context.getString(R.string.default_new_player_format, num)
+                            isDialogInputFocused = false
+                            activeDialog = LauncherDialog.AddOfflineAccount
+                        },
+                        onSelectMicrosoft = {
+                            activeDialog = null
+                            isMicrosoftLoginOpen = true
+                        },
+                    )
+                }
+                is LauncherDialog.AddOfflineAccount -> {
                     LauncherTextInputDialogContent(
-                        title = stringResource(R.string.add_account),
+                        title = stringResource(R.string.dialog_add_offline_account_title),
                         value = dialogInputText,
                         onValueChange = { dialogInputText = it },
                         confirmText = stringResource(R.string.action_add),
@@ -1172,6 +1205,43 @@ fun LauncherScreen(
                 }
                 null -> Unit
             }
+        }
+
+        if (isMicrosoftLoginOpen) {
+            MicrosoftLoginScreen(
+                onClose = { isMicrosoftLoginOpen = false },
+                onSuccess = { authResult ->
+                    val existing = accounts.firstOrNull { it.username.equals(authResult.username, ignoreCase = true) }
+                    val accountId = existing?.id ?: "ms_${authResult.uuid}"
+                    val newAcc = LauncherAccount(
+                        id = accountId,
+                        username = authResult.username,
+                        typeRes = R.string.account_type_microsoft,
+                        uuid = authResult.uuid,
+                        accessToken = authResult.accessToken,
+                        msaRefreshToken = authResult.refreshToken,
+                    )
+                    accounts = if (existing != null) {
+                        accounts.map { if (it.id == existing.id) newAcc else it }
+                    } else {
+                        accounts + newAcc
+                    }
+                    selectedAccountId = newAcc.id
+                    isMicrosoftLoginOpen = false
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.microsoft_login_success, authResult.username),
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                },
+                onError = { errorMsg ->
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.microsoft_login_failed, errorMsg),
+                        Toast.LENGTH_LONG,
+                    ).show()
+                },
+            )
         }
     }
     }
@@ -1487,6 +1557,369 @@ private fun LauncherConfirmDialogContent(
                         fontWeight = FontWeight.Bold,
                     ),
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChooseAccountTypeDialogContent(
+    onCancel: () -> Unit,
+    onSelectOffline: () -> Unit,
+    onSelectMicrosoft: () -> Unit,
+) {
+    val colors = LauncherTheme.colors
+    val modalShape = RoundedCornerShape(20.dp)
+
+    Column(
+        modifier = Modifier
+            .width(360.dp)
+            .clip(modalShape)
+            .background(colors.dialogSurface)
+            .border(1.dp, colors.borderModal, modalShape)
+            .padding(horizontal = 20.dp, vertical = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = stringResource(R.string.add_account),
+                color = colors.textPrimary,
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                ),
+            )
+            // Close 'X' button
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .smoothPressClickable(
+                        pressScale = 0.90f,
+                        onClick = onCancel,
+                    )
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(colors.surfaceButtonSubtle)
+                    .border(1.dp, colors.borderButton, RoundedCornerShape(8.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_close_chevron),
+                    contentDescription = stringResource(R.string.action_cancel),
+                    tint = colors.textMuted,
+                    modifier = Modifier.size(14.dp),
+                )
+            }
+        }
+
+        // Two options side by side: Left = Offline, Right = Microsoft
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            // Left Option: {disconnected_icon} Offline
+            AccountTypeOptionCard(
+                modifier = Modifier.weight(1f),
+                iconRes = R.drawable.ic_offline,
+                title = stringResource(R.string.account_type_offline_name),
+                iconTint = colors.iconPrimary,
+                onClick = onSelectOffline,
+            )
+
+            // Right Option: {Microsoft_logo} Microsoft
+            AccountTypeOptionCard(
+                modifier = Modifier.weight(1f),
+                iconRes = R.drawable.ic_microsoft,
+                title = stringResource(R.string.account_type_microsoft_name),
+                iconTint = Color.Unspecified,
+                onClick = onSelectMicrosoft,
+            )
+        }
+    }
+}
+
+@Composable
+private fun AccountTypeOptionCard(
+    modifier: Modifier = Modifier,
+    @DrawableRes iconRes: Int,
+    title: String,
+    iconTint: Color = Color.Unspecified,
+    onClick: () -> Unit,
+) {
+    val colors = LauncherTheme.colors
+    val cardShape = RoundedCornerShape(14.dp)
+
+    Column(
+        modifier = modifier
+            .smoothPressClickable(
+                pressScale = 0.93f,
+                onClick = onClick,
+            )
+            .clip(cardShape)
+            .background(colors.surfaceCard)
+            .border(1.dp, colors.borderButtonStrong, cardShape)
+            .padding(vertical = 18.dp, horizontal = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Icon(
+            painter = painterResource(id = iconRes),
+            contentDescription = title,
+            tint = iconTint,
+            modifier = Modifier.size(36.dp),
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        Text(
+            text = title,
+            color = colors.textPrimary,
+            style = MaterialTheme.typography.titleMedium.copy(
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+            ),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun MicrosoftLoginScreen(
+    onClose: () -> Unit,
+    onSuccess: (MicrosoftAuthResult) -> Unit,
+    onError: (String) -> Unit,
+) {
+    val colors = LauncherTheme.colors
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    var webViewRef by remember { mutableStateOf<WebView?>(null) }
+    var isAuthenticating by remember { mutableStateOf(false) }
+    var authStepText by remember { mutableStateOf(context.getString(R.string.microsoft_login_loading)) }
+    var isLoadingPage by remember { mutableStateOf(true) }
+
+    BackHandler(enabled = true) {
+        if (!isAuthenticating) {
+            if (webViewRef?.canGoBack() == true) {
+                webViewRef?.goBack()
+            } else {
+                onClose()
+            }
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            webViewRef?.stopLoading()
+            webViewRef?.destroy()
+            webViewRef = null
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF1E1E1E)),
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Top App Bar
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp)
+                    .background(colors.dialogSurface)
+                    .border(1.dp, colors.borderSubtle, RectangleShape)
+                    .padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                // Left: Back/Close button + Microsoft Logo + Title
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .smoothPressClickable(
+                                pressScale = 0.92f,
+                                enabled = !isAuthenticating,
+                                onClick = onClose,
+                            )
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(colors.surfaceButtonSubtle)
+                            .border(1.dp, colors.borderButton, RoundedCornerShape(10.dp)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_close_chevron),
+                            contentDescription = stringResource(R.string.action_cancel),
+                            tint = colors.textPrimary,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_microsoft),
+                        contentDescription = null,
+                        tint = Color.Unspecified,
+                        modifier = Modifier.size(20.dp),
+                    )
+
+                    Text(
+                        text = stringResource(R.string.microsoft_login_title),
+                        color = colors.textPrimary,
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                        ),
+                    )
+                }
+
+                // Right: Reload button
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .smoothPressClickable(
+                            pressScale = 0.92f,
+                            enabled = !isAuthenticating,
+                            onClick = { webViewRef?.reload() },
+                        )
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(colors.surfaceButtonSubtle)
+                        .border(1.dp, colors.borderButton, RoundedCornerShape(10.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_change),
+                        contentDescription = "Reload",
+                        tint = colors.textPrimary,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+
+            // Page Loading Progress Bar
+            if (isLoadingPage && !isAuthenticating) {
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(2.dp),
+                    color = colors.accent,
+                    trackColor = colors.transparent,
+                )
+            }
+
+            // Full-screen WebView
+            AndroidView(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                factory = { ctx ->
+                    WebView(ctx).apply {
+                        layoutParams = ViewGroup.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                        )
+                        settings.apply {
+                            javaScriptEnabled = true
+                            domStorageEnabled = true
+                            cacheMode = WebSettings.LOAD_NO_CACHE
+                            useWideViewPort = true
+                            loadWithOverviewMode = true
+                            setSupportZoom(true)
+                            builtInZoomControls = true
+                            displayZoomControls = false
+                            userAgentString = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+                        }
+                        CookieManager.getInstance().removeAllCookies(null)
+                        CookieManager.getInstance().flush()
+                        clearHistory()
+                        clearCache(true)
+                        clearFormData()
+
+                        webViewClient = object : WebViewClient() {
+                            override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
+                                if (MicrosoftAuthenticator.isRedirectUrl(url)) {
+                                    val code = MicrosoftAuthenticator.extractCode(url)
+                                    if (!code.isNullOrBlank()) {
+                                        isAuthenticating = true
+                                        authStepText = context.getString(R.string.microsoft_login_loading)
+                                        coroutineScope.launch {
+                                            val result = MicrosoftAuthenticator.authenticateWithCode(code)
+                                            result.onSuccess { authResult ->
+                                                onSuccess(authResult)
+                                            }.onFailure { ex ->
+                                                isAuthenticating = false
+                                                onError(ex.message ?: "Authentication failed")
+                                            }
+                                        }
+                                        return true
+                                    }
+                                    if (url.contains("error=") || url.contains("res=cancel")) {
+                                        onClose()
+                                        return true
+                                    }
+                                }
+                                return false
+                            }
+
+                            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                                isLoadingPage = true
+                            }
+
+                            override fun onPageFinished(view: WebView?, url: String?) {
+                                isLoadingPage = false
+                            }
+                        }
+
+                        loadUrl(MicrosoftAuthenticator.LOGIN_URL)
+                        webViewRef = this
+                    }
+                },
+            )
+        }
+
+        // Full screen authentication loading overlay when tokens are being exchanged
+        if (isAuthenticating) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xD9000000))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {},
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                val modalShape = RoundedCornerShape(18.dp)
+                Column(
+                    modifier = Modifier
+                        .width(280.dp)
+                        .clip(modalShape)
+                        .background(colors.dialogSurface)
+                        .border(1.dp, colors.borderModal, modalShape)
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(36.dp),
+                        color = colors.accent,
+                        strokeWidth = 3.dp,
+                    )
+                    Text(
+                        text = authStepText,
+                        color = colors.textPrimary,
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                        ),
+                        textAlign = TextAlign.Center,
+                    )
+                }
             }
         }
     }
@@ -3977,16 +4410,43 @@ private fun AccountPanelContent(
                                                 ),
                                         )
                                         Spacer(modifier = Modifier.width(12.dp))
-                                        Text(
-                                            text = account.username,
-                                            color = titleColor,
-                                            style = MaterialTheme.typography.bodyLarge.copy(
-                                                fontSize = 14.sp,
-                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                            ),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
+                                        Column(
+                                            verticalArrangement = Arrangement.Center,
+                                        ) {
+                                            Text(
+                                                text = account.username,
+                                                color = titleColor,
+                                                style = MaterialTheme.typography.bodyLarge.copy(
+                                                    fontSize = 14.sp,
+                                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                                ),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                            ) {
+                                                Icon(
+                                                    painter = painterResource(
+                                                        id = if (account.typeRes == R.string.account_type_microsoft) R.drawable.ic_microsoft else R.drawable.ic_offline,
+                                                    ),
+                                                    contentDescription = null,
+                                                    tint = if (account.typeRes == R.string.account_type_microsoft) Color.Unspecified else colors.textMuted,
+                                                    modifier = Modifier.size(11.dp),
+                                                )
+                                                Text(
+                                                    text = stringResource(account.typeRes),
+                                                    color = colors.textMuted,
+                                                    style = MaterialTheme.typography.labelSmall.copy(
+                                                        fontSize = 10.sp,
+                                                        fontWeight = FontWeight.Normal,
+                                                    ),
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                )
+                                            }
+                                        }
                                     }
 
                                     // Right: More options {•••} (plus smoothly animated inline Rename / Remove)

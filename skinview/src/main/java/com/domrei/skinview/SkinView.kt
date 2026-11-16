@@ -125,14 +125,17 @@ class SkinView @JvmOverloads constructor(
         requestRender()
     }
 
-    fun onResume() {
-        isPausedState = false
-        glThread?.setPaused(false)
-    }
+    fun onResume() = setPaused(false)
 
-    fun onPause() {
-        isPausedState = true
-        glThread?.setPaused(true)
+    fun onPause() = setPaused(true)
+
+    /**
+     * Pauses/resumes the GL render thread without tearing down the surface.
+     * Used both for lifecycle changes and for temporarily hiding the preview.
+     */
+    fun setPaused(value: Boolean) {
+        isPausedState = value
+        glThread?.setPaused(value)
     }
 
     fun requestRender() {
@@ -375,8 +378,10 @@ class SkinView @JvmOverloads constructor(
                     EGL14.eglSwapBuffers(eglDisplay, eglSurface)
 
                     if (isContinuous) {
+                        // 30 fps is plenty for the looping idle/display animation and halves the
+                        // GPU load of the 3D preview while the Compose UI is animating on top.
                         val elapsed = System.currentTimeMillis() - frameStartMs
-                        val waitMs = (16L - elapsed).coerceAtLeast(1L)
+                        val waitMs = (33L - elapsed).coerceAtLeast(1L)
                         synchronized(lock) {
                             if (!shouldExit && !dirty && !sizeChanged) {
                                 try {

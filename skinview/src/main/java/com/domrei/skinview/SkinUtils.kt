@@ -4,6 +4,8 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Rect
@@ -106,6 +108,57 @@ object SkinUtils {
             return true
         }
         return transparent(50, 16, 2, 4) && transparent(54, 20, 2, 12)
+    }
+
+    /**
+     * Converts a slim (3px arms) skin to the classic model (4px arms) by widening the arm faces
+     * by one pixel column, so it renders correctly with the classic box mesh.
+     * Non-slim skins are returned unchanged.
+     */
+    fun toClassicModel(skin: Bitmap): Bitmap {
+        if (!isSlim(skin)) return skin
+        val s = skin.width / 64
+        val out = skin.copy(Bitmap.Config.ARGB_8888, true)
+        val canvas = Canvas(out)
+        val paint = Paint().apply { isFilterBitmap = false }
+
+        fun face(srcX: Int, srcY: Int, srcW: Int, srcH: Int, dstX: Int, dstY: Int, dstW: Int = srcW) {
+            canvas.drawBitmap(
+                skin,
+                Rect(srcX * s, srcY * s, (srcX + srcW) * s, (srcY + srcH) * s),
+                Rect(dstX * s, dstY * s, (dstX + dstW) * s, (dstY + srcH) * s),
+                paint,
+            )
+        }
+
+        // Right arm (u=40, v=16): top, bottom, outer, front, inner, back
+        face(44, 16, 3, 4, 44, 16, 4)
+        face(47, 16, 3, 4, 48, 16, 4)
+        face(40, 20, 4, 12, 40, 20)
+        face(44, 20, 3, 12, 44, 20, 4)
+        face(47, 20, 4, 12, 48, 20)
+        face(51, 20, 3, 12, 52, 20, 4)
+
+        // Left arm (u=32, v=48)
+        face(36, 48, 3, 4, 36, 48, 4)
+        face(39, 48, 3, 4, 40, 48, 4)
+        face(32, 52, 4, 12, 32, 52)
+        face(36, 52, 3, 12, 36, 52, 4)
+        face(39, 52, 4, 12, 40, 52)
+        face(43, 52, 3, 12, 44, 52, 4)
+
+        return out
+    }
+
+    /** Desaturates a skin/cape texture, preserving its alpha channel (used for the no-account placeholder). */
+    fun toGrayscale(texture: Bitmap): Bitmap {
+        val src = if (texture.config == Bitmap.Config.ARGB_8888) texture else texture.copy(Bitmap.Config.ARGB_8888, false)
+        val out = Bitmap.createBitmap(src.width, src.height, Bitmap.Config.ARGB_8888)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            colorFilter = ColorMatrixColorFilter(ColorMatrix().apply { setSaturation(0f) })
+        }
+        Canvas(out).drawBitmap(src, 0f, 0f, paint)
+        return out
     }
 
     /** Scales a cape to a 64x32-based texture. Supports 22x17 legacy capes and 64x32 multiples. */

@@ -626,21 +626,17 @@ fun LauncherScreen(
     // Auto-sync official Minecraft skin in background for Microsoft accounts if not already cached
     LaunchedEffect(selectedAccount?.id) {
         val acc = selectedAccount ?: return@LaunchedEffect
-        if (AccountSkinManager.isMicrosoftAccount(acc) && !AccountSkinManager.hasSkin(context, acc)) {
-            val synced = AccountSkinManager.syncAccountSkin(context, acc)
-            if (synced != null) {
-                skinRefreshKey++
-            }
+        if (AccountSkinManager.isMicrosoftAccount(acc) && (!AccountSkinManager.hasSkin(context, acc) || !AccountSkinManager.hasCapeChecked(context, acc))) {
+            AccountSkinManager.syncAccountSkin(context, acc)
+            skinRefreshKey++
         }
     }
     LaunchedEffect(accounts) {
         var anySynced = false
         accounts.forEach { acc ->
-            if (AccountSkinManager.isMicrosoftAccount(acc) && !AccountSkinManager.hasSkin(context, acc)) {
-                val synced = AccountSkinManager.syncAccountSkin(context, acc)
-                if (synced != null) {
-                    anySynced = true
-                }
+            if (AccountSkinManager.isMicrosoftAccount(acc) && (!AccountSkinManager.hasSkin(context, acc) || !AccountSkinManager.hasCapeChecked(context, acc))) {
+                AccountSkinManager.syncAccountSkin(context, acc)
+                anySynced = true
             }
         }
         if (anySynced) {
@@ -781,6 +777,15 @@ fun LauncherScreen(
                 } else {
                     AccountSkinManager.syncAccountSkin(context, newAcc, force = true)
                 }
+
+                if (result.capeUrl != null) {
+                    val downloadedCape = AccountSkinManager.downloadAndSaveCape(context, result.uuid, result.capeUrl)
+                    if (downloadedCape != null) {
+                        AccountSkinManager.saveCapeBitmap(context, newAcc, downloadedCape)
+                    }
+                } else {
+                    AccountSkinManager.deleteCape(context, newAcc)
+                }
                 val updatedAccounts = if (existing != null) {
                     accounts.map { if (it.id == existing.id) newAcc else it }
                 } else {
@@ -880,6 +885,15 @@ fun LauncherScreen(
                         }
                     } else {
                         AccountSkinManager.syncAccountSkin(context, updatedAccount, force = true)
+                    }
+
+                    if (result.capeUrl != null) {
+                        val downloadedCape = AccountSkinManager.downloadAndSaveCape(context, result.uuid, result.capeUrl)
+                        if (downloadedCape != null) {
+                            AccountSkinManager.saveCapeBitmap(context, updatedAccount, downloadedCape)
+                        }
+                    } else {
+                        AccountSkinManager.deleteCape(context, updatedAccount)
                     }
 
                     val updatedAccounts = accounts.map { if (it.id == account.id) updatedAccount else it }
@@ -1473,6 +1487,8 @@ fun LauncherScreen(
                         confirmText = stringResource(R.string.action_remove),
                         onCancel = { activeDialog = null },
                         onConfirm = {
+                            AccountSkinManager.deleteSkin(context, dialog.account)
+                            AccountSkinManager.deleteCape(context, dialog.account, markChecked = false)
                             val remaining = accounts.filterNot { it.id == dialog.account.id }
                             accounts = remaining
                             if (selectedAccountId == dialog.account.id) {
@@ -4579,7 +4595,9 @@ private fun AccountPanelContent(
     val skinHeadBitmap = remember(skin) {
         extractSkinHeadBitmap(skin)
     }
-    val cape: Bitmap? = null
+    val cape = remember(selectedAccount?.id, skinRefreshKey) {
+        AccountSkinManager.loadCape(context, selectedAccount)
+    }
     val previewUsername = selectedAccount?.username ?: ""
 
     // Account ID whose {•••} options menu is currently expanded
@@ -5016,7 +5034,9 @@ fun RightPlayAndSkinPanel(
         AccountSkinManager.loadSkin(context, activeAccount)
     }
     val skin = if (hasAccount) accountSkin else rememberNoAccountSkin()
-    val cape: Bitmap? = null
+    val cape = remember(activeAccount?.id, skinRefreshKey) {
+        AccountSkinManager.loadCape(context, activeAccount)
+    }
 
     val isMicrosoft = activeAccount != null && activeAccount.typeRes == R.string.account_type_microsoft
 

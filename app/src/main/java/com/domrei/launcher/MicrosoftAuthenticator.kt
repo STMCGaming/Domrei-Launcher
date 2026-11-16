@@ -439,9 +439,9 @@ object MicrosoftAuthenticator {
                 for (i in 0 until capesArray.length()) {
                     val item = capesArray.getJSONObject(i)
                     val state = item.optString("state", "")
-                    if (state.equals("ACTIVE", ignoreCase = true) || capeUrl == null) {
+                    if (state.equals("ACTIVE", ignoreCase = true)) {
                         capeUrl = item.optString("url").takeIf { it.isNotEmpty() }?.replace("http://", "https://")
-                        if (state.equals("ACTIVE", ignoreCase = true)) break
+                        break
                     }
                 }
             }

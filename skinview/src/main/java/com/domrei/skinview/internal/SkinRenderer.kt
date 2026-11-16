@@ -198,6 +198,8 @@ internal class SkinRenderer : GLSurfaceView.Renderer {
         // --- pass 2: cape ---
         if (v.cape && capeTex != 0 && pose.cape.visible) {
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, capeTex)
+            GLES20.glEnable(GLES20.GL_BLEND)
+            GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA)
             GLES20.glUniform1f(uOpaque, 0f)
             GLES20.glDisable(GLES20.GL_CULL_FACE)
             partMatrix(pose.cape, 0f, 24f, -2f, 0f, -8f, 0.5f, extraX = PlayerPose.DEFAULT_CAPE_ANGLE, flip = true)

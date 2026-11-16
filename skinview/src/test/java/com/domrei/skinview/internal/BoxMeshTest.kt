@@ -45,6 +45,37 @@ class BoxMeshTest {
     }
 
     @Test
+    fun headBottomFaceUsesCorrectOrientation() {
+        val mesh = BoxMesh(8f, 8f, 8f, 0f, 0f, 64f, 64f)
+        val bottom = vertices(mesh).filter { it[6] == -1f }
+        assertEquals(6, bottom.size)
+        val us = bottom.map { it[3] * 64f }
+        val vs = bottom.map { it[4] * 64f }
+        assertEquals(16f, us.min(), 1e-4f); assertEquals(24f, us.max(), 1e-4f)
+        assertEquals(0f, vs.min(), 1e-4f); assertEquals(8f, vs.max(), 1e-4f)
+
+        // Top edge of texture (v = 0) must be at the back of the head (z < 0)
+        val backEdge = bottom.filter { it[4] * 64f == 0f }
+        assertTrue(backEdge.isNotEmpty())
+        assertTrue(backEdge.all { it[2] < 0f })
+
+        // Bottom edge of texture (v = 8) must be at the chin / front (z > 0)
+        val frontEdge = bottom.filter { it[4] * 64f == 8f }
+        assertTrue(frontEdge.isNotEmpty())
+        assertTrue(frontEdge.all { it[2] > 0f })
+
+        // Left edge of texture (u = 16) must be at model's right (x < 0)
+        val rightEdge = bottom.filter { it[3] * 64f == 16f }
+        assertTrue(rightEdge.isNotEmpty())
+        assertTrue(rightEdge.all { it[0] < 0f })
+
+        // Right edge of texture (u = 24) must be at model's left (x > 0)
+        val leftEdge = bottom.filter { it[3] * 64f == 24f }
+        assertTrue(leftEdge.isNotEmpty())
+        assertTrue(leftEdge.all { it[0] > 0f })
+    }
+
+    @Test
     fun inflateGrowsGeometryButNotUv() {
         val mesh = BoxMesh(8f, 8f, 8f, 32f, 0f, 64f, 64f, inflate = 0.5f)
         val v = vertices(mesh)

@@ -58,7 +58,29 @@ internal class BoxMesh(
         // top (+Y)
         face(u + d, v, w, d, p(-hx, hy, -hz), p(hx, hy, -hz), p(hx, hy, hz), p(-hx, hy, hz), 0f, 1f, 0f)
         // bottom (-Y)
-        face(u + d + w, v, w, d, p(-hx, -hy, hz), p(hx, -hy, hz), p(hx, -hy, -hz), p(-hx, -hy, -hz), 0f, -1f, 0f)
+        // In Minecraft UV layout:
+        // Top edge of texture (v0) connects to the back of the part (-hz).
+        // Bottom edge of texture (v1) connects to the front of the part (+hz).
+        // Left edge of texture (u0) connects to the model's right (-hx).
+        // Right edge of texture (u1) connects to the model's left (+hx).
+        fun faceBottom(ru: Float, rv: Float, rw: Float, rh: Float) {
+            val u0 = ru / textureWidth; val u1 = (ru + rw) / textureWidth
+            val v0 = rv / textureHeight; val v1 = (rv + rh) / textureHeight
+            fun put(p: FloatArray, tu: Float, tv: Float) {
+                data[i++] = p[0]; data[i++] = p[1]; data[i++] = p[2]
+                data[i++] = tu; data[i++] = tv
+                data[i++] = 0f; data[i++] = -1f; data[i++] = 0f
+            }
+            val p00 = p(-hx, -hy, -hz) // Right, Back (u0, v0)
+            val p10 = p(hx, -hy, -hz)  // Left, Back  (u1, v0)
+            val p11 = p(hx, -hy, hz)   // Left, Front (u1, v1)
+            val p01 = p(-hx, -hy, hz)  // Right, Front(u0, v1)
+
+            // Two CCW triangles (seen from outside looking up at -Y)
+            put(p00, u0, v0); put(p11, u1, v1); put(p01, u0, v1)
+            put(p00, u0, v0); put(p10, u1, v0); put(p11, u1, v1)
+        }
+        faceBottom(u + d + w, v, w, d)
 
         buffer = ByteBuffer.allocateDirect(data.size * 4)
             .order(ByteOrder.nativeOrder())

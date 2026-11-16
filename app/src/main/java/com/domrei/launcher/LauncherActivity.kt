@@ -620,6 +620,31 @@ fun LauncherScreen(
     val selectedAccount = remember(accounts, selectedAccountId) {
         accounts.firstOrNull { it.id == selectedAccountId } ?: accounts.firstOrNull()
     }
+
+    // Auto-sync official Minecraft skin in background if not already cached
+    LaunchedEffect(selectedAccount?.id) {
+        val acc = selectedAccount ?: return@LaunchedEffect
+        if (!AccountSkinManager.hasSkin(context, acc)) {
+            val synced = AccountSkinManager.syncAccountSkin(context, acc)
+            if (synced != null) {
+                skinRefreshKey++
+            }
+        }
+    }
+    LaunchedEffect(accounts) {
+        var anySynced = false
+        accounts.forEach { acc ->
+            if (!AccountSkinManager.hasSkin(context, acc)) {
+                val synced = AccountSkinManager.syncAccountSkin(context, acc)
+                if (synced != null) {
+                    anySynced = true
+                }
+            }
+        }
+        if (anySynced) {
+            skinRefreshKey++
+        }
+    }
     val defaultPlayerName = stringResource(R.string.default_player_name)
     val activeUsername = selectedAccount?.username ?: ""
     val launchUsername = selectedAccount?.username ?: defaultPlayerName
@@ -709,8 +734,8 @@ fun LauncherScreen(
             authSnapshot = InstallProgressSnapshot(
                 progress = 0.15f,
                 currentFileName = context.getString(R.string.microsoft_verify_token),
-                downloadedMb = 0.15f,
-                totalMb = 1.0f,
+                downloadedMb = 0f,
+                totalMb = 0f,
                 speedMbPerSec = 0f,
             )
 
@@ -718,8 +743,8 @@ fun LauncherScreen(
                 authSnapshot = InstallProgressSnapshot(
                     progress = progress,
                     currentFileName = stepMessage,
-                    downloadedMb = progress,
-                    totalMb = 1.0f,
+                    downloadedMb = 0f,
+                    totalMb = 0f,
                     speedMbPerSec = 0f,
                 )
                 activeAuthTask = activeAuthTask?.copy(
@@ -727,17 +752,6 @@ fun LauncherScreen(
                     customStatusTitle = stepMessage,
                 )
             }.onSuccess { result ->
-                if (result.skinUrl != null) {
-                    authSnapshot = InstallProgressSnapshot(
-                        progress = 0.95f,
-                        currentFileName = context.getString(R.string.microsoft_syncing_skin),
-                        downloadedMb = 0.95f,
-                        totalMb = 1.0f,
-                        speedMbPerSec = 0f,
-                    )
-                    AccountSkinManager.downloadAndSaveSkin(context, result.uuid, result.skinUrl)
-                }
-
                 val existing = accounts.firstOrNull { it.uuid == result.uuid || it.username.equals(result.username, ignoreCase = true) }
                 val accountId = existing?.id ?: "ms_${result.uuid}"
                 val newAcc = LauncherAccount(
@@ -748,6 +762,22 @@ fun LauncherScreen(
                     accessToken = result.accessToken,
                     msaRefreshToken = result.refreshToken,
                 )
+
+                if (result.skinUrl != null) {
+                    authSnapshot = InstallProgressSnapshot(
+                        progress = 0.95f,
+                        currentFileName = context.getString(R.string.microsoft_syncing_skin),
+                        downloadedMb = 0f,
+                        totalMb = 0f,
+                        speedMbPerSec = 0f,
+                    )
+                    val downloaded = AccountSkinManager.downloadAndSaveSkin(context, result.uuid, result.skinUrl)
+                    if (downloaded != null) {
+                        AccountSkinManager.saveSkinBitmap(context, newAcc, downloaded)
+                    }
+                } else {
+                    AccountSkinManager.syncAccountSkin(context, newAcc, force = true)
+                }
                 val updatedAccounts = if (existing != null) {
                     accounts.map { if (it.id == existing.id) newAcc else it }
                 } else {
@@ -762,8 +792,8 @@ fun LauncherScreen(
                 authSnapshot = InstallProgressSnapshot(
                     progress = 1.0f,
                     currentFileName = context.getString(R.string.microsoft_login_success_named, result.username),
-                    downloadedMb = 1.0f,
-                    totalMb = 1.0f,
+                    downloadedMb = 0f,
+                    totalMb = 0f,
                     speedMbPerSec = 0f,
                 )
                 delay(1200)
@@ -775,8 +805,8 @@ fun LauncherScreen(
                 authSnapshot = InstallProgressSnapshot(
                     progress = 1.0f,
                     currentFileName = errorMsg,
-                    downloadedMb = 1.0f,
-                    totalMb = 1.0f,
+                    downloadedMb = 0f,
+                    totalMb = 0f,
                     speedMbPerSec = 0f,
                 )
                 Toast.makeText(context, errorMsg, Toast.LENGTH_LONG).show()
@@ -807,8 +837,8 @@ fun LauncherScreen(
                 authSnapshot = InstallProgressSnapshot(
                     progress = 0.15f,
                     currentFileName = context.getString(R.string.microsoft_refresh_token_step),
-                    downloadedMb = 0.15f,
-                    totalMb = 1.0f,
+                    downloadedMb = 0f,
+                    totalMb = 0f,
                     speedMbPerSec = 0f,
                 )
 
@@ -816,8 +846,8 @@ fun LauncherScreen(
                     authSnapshot = InstallProgressSnapshot(
                         progress = progress,
                         currentFileName = stepMessage,
-                        downloadedMb = progress,
-                        totalMb = 1.0f,
+                        downloadedMb = 0f,
+                        totalMb = 0f,
                         speedMbPerSec = 0f,
                     )
                     activeAuthTask = activeAuthTask?.copy(
@@ -825,23 +855,29 @@ fun LauncherScreen(
                         customStatusTitle = stepMessage,
                     )
                 }.onSuccess { result ->
-                    if (result.skinUrl != null) {
-                        authSnapshot = InstallProgressSnapshot(
-                            progress = 0.95f,
-                            currentFileName = context.getString(R.string.microsoft_syncing_skin),
-                            downloadedMb = 0.95f,
-                            totalMb = 1.0f,
-                            speedMbPerSec = 0f,
-                        )
-                        AccountSkinManager.downloadAndSaveSkin(context, result.uuid, result.skinUrl)
-                    }
-
                     val updatedAccount = account.copy(
                         username = result.username,
                         uuid = result.uuid,
                         accessToken = result.accessToken,
                         msaRefreshToken = result.refreshToken ?: account.msaRefreshToken,
                     )
+
+                    if (result.skinUrl != null) {
+                        authSnapshot = InstallProgressSnapshot(
+                            progress = 0.95f,
+                            currentFileName = context.getString(R.string.microsoft_syncing_skin),
+                            downloadedMb = 0f,
+                            totalMb = 0f,
+                            speedMbPerSec = 0f,
+                        )
+                        val downloaded = AccountSkinManager.downloadAndSaveSkin(context, result.uuid, result.skinUrl)
+                        if (downloaded != null) {
+                            AccountSkinManager.saveSkinBitmap(context, updatedAccount, downloaded)
+                        }
+                    } else {
+                        AccountSkinManager.syncAccountSkin(context, updatedAccount, force = true)
+                    }
+
                     val updatedAccounts = accounts.map { if (it.id == account.id) updatedAccount else it }
                     accounts = updatedAccounts
                     accountStore.saveAccounts(updatedAccounts)
@@ -850,8 +886,8 @@ fun LauncherScreen(
                     authSnapshot = InstallProgressSnapshot(
                         progress = 1.0f,
                         currentFileName = context.getString(R.string.microsoft_refresh_success),
-                        downloadedMb = 1.0f,
-                        totalMb = 1.0f,
+                        downloadedMb = 0f,
+                        totalMb = 0f,
                         speedMbPerSec = 0f,
                     )
                     delay(1200)
@@ -863,8 +899,8 @@ fun LauncherScreen(
                     authSnapshot = InstallProgressSnapshot(
                         progress = 1.0f,
                         currentFileName = errorMsg,
-                        downloadedMb = 1.0f,
-                        totalMb = 1.0f,
+                        downloadedMb = 0f,
+                        totalMb = 0f,
                         speedMbPerSec = 0f,
                     )
                     Toast.makeText(context, errorMsg, Toast.LENGTH_LONG).show()
@@ -3792,8 +3828,13 @@ fun ProgressBar(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
+                        val statusText = if (task.isInstanceInstall) {
+                            stringResource(R.string.downloading_item_format, currentFileName)
+                        } else {
+                            currentFileName
+                        }
                         Text(
-                            text = stringResource(R.string.downloading_item_format, currentFileName),
+                            text = statusText,
                             color = colors.textBody,
                             style = MaterialTheme.typography.labelSmall.copy(
                                 fontSize = 11.sp,
@@ -3803,20 +3844,22 @@ fun ProgressBar(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f),
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = stringResource(
-                                R.string.download_speed_format,
-                                String.format(Locale.US, "%.1f", downloadedMb),
-                                String.format(Locale.US, "%.1f", totalMb),
-                                String.format(Locale.US, "%.1f", speedMbPerSec),
-                            ),
-                            color = statusAccentColor.copy(alpha = 0.90f),
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.SemiBold,
-                            ),
-                        )
+                        if (task.isInstanceInstall && totalMb > 0f) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = stringResource(
+                                    R.string.download_speed_format,
+                                    String.format(Locale.US, "%.1f", downloadedMb),
+                                    String.format(Locale.US, "%.1f", totalMb),
+                                    String.format(Locale.US, "%.1f", speedMbPerSec),
+                                ),
+                                color = statusAccentColor.copy(alpha = 0.90f),
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                ),
+                            )
+                        }
                     }
 
                     // Detailed per-stage download list

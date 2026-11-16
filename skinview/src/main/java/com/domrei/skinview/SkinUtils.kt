@@ -38,18 +38,41 @@ object SkinUtils {
      * Download a texture. Requires the `android.permission.INTERNET` permission in the app manifest.
      */
     suspend fun fromUrl(url: String): Bitmap = withContext(Dispatchers.IO) {
-        val connection = URL(url).openConnection() as HttpURLConnection
-        try {
-            connection.connectTimeout = 10_000
-            connection.readTimeout = 10_000
-            connection.instanceFollowRedirects = true
-            if (connection.responseCode !in 200..299) {
-                error("HTTP ${connection.responseCode} while loading $url")
-            }
-            connection.inputStream.use { fromStream(it) }
-        } finally {
-            connection.disconnect()
+        var currentUrl = if (url.startsWith("http://", ignoreCase = true)) {
+            url.replaceFirst("http://", "https://", ignoreCase = true)
+        } else {
+            url
         }
+        var redirects = 0
+        while (redirects < 5) {
+            val connection = URL(currentUrl).openConnection() as HttpURLConnection
+            try {
+                connection.connectTimeout = 10_000
+                connection.readTimeout = 10_000
+                connection.instanceFollowRedirects = true
+                connection.setRequestProperty("User-Agent", "DomreiLauncher/1.0 (Android)")
+                val code = connection.responseCode
+                if (code in 300..399) {
+                    val location = connection.getHeaderField("Location")
+                    if (!location.isNullOrBlank()) {
+                        currentUrl = if (location.startsWith("http://", ignoreCase = true)) {
+                            location.replaceFirst("http://", "https://", ignoreCase = true)
+                        } else {
+                            location
+                        }
+                        redirects++
+                        continue
+                    }
+                }
+                if (code !in 200..299) {
+                    error("HTTP $code while loading $currentUrl")
+                }
+                return@withContext connection.inputStream.use { fromStream(it) }
+            } finally {
+                connection.disconnect()
+            }
+        }
+        error("Too many redirects for $url")
     }
 
     /**

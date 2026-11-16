@@ -358,7 +358,7 @@ object MicrosoftAuthenticator {
         }
     }
 
-    private fun fetchMinecraftProfile(mcToken: String): MinecraftProfileData {
+    private suspend fun fetchMinecraftProfile(mcToken: String): MinecraftProfileData {
         val conn = (URL(MC_PROFILE_URL).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             setRequestProperty("Authorization", "Bearer $mcToken")
@@ -381,7 +381,7 @@ object MicrosoftAuthenticator {
                     val item = skinsArray.getJSONObject(i)
                     val state = item.optString("state", "")
                     if (state.equals("ACTIVE", ignoreCase = true) || skinUrl == null) {
-                        skinUrl = item.optString("url").takeIf { it.isNotEmpty() }
+                        skinUrl = item.optString("url").takeIf { it.isNotEmpty() }?.replace("http://", "https://")
                         val variant = item.optString("variant", "CLASSIC")
                         isSlim = variant.equals("SLIM", ignoreCase = true)
                         if (state.equals("ACTIVE", ignoreCase = true)) break
@@ -396,8 +396,21 @@ object MicrosoftAuthenticator {
                     val item = capesArray.getJSONObject(i)
                     val state = item.optString("state", "")
                     if (state.equals("ACTIVE", ignoreCase = true) || capeUrl == null) {
-                        capeUrl = item.optString("url").takeIf { it.isNotEmpty() }
+                        capeUrl = item.optString("url").takeIf { it.isNotEmpty() }?.replace("http://", "https://")
                         if (state.equals("ACTIVE", ignoreCase = true)) break
+                    }
+                }
+            }
+
+            if (skinUrl == null) {
+                val fallbackProfile = runCatching {
+                    com.domrei.skinview.MojangSkinApi.fetchByUuid(uuid).getOrNull()
+                }.getOrNull()
+                if (fallbackProfile != null) {
+                    skinUrl = fallbackProfile.skinUrl
+                    isSlim = fallbackProfile.isSlim
+                    if (capeUrl == null) {
+                        capeUrl = fallbackProfile.capeUrl
                     }
                 }
             }

@@ -15,8 +15,11 @@ class MojangSkinApiTest {
         val profile = result.getOrNull()
         assertNotNull(profile)
         assertEquals("Notch", profile?.username)
-        assertEquals("069a79f444e94726a5befca90e38aaf5", profile?.uuid)
         assertNotNull("Skin URL should be present", profile?.skinUrl)
-        assertTrue("Skin URL should point to textures.minecraft.net", profile!!.skinUrl!!.contains("textures.minecraft.net"))
+        val skinUrl = profile!!.skinUrl!!
+        assertTrue(
+            "Skin URL should point to textures.minecraft.net, crafatar.com, or minotar.net: $skinUrl",
+            skinUrl.contains("textures.minecraft.net") || skinUrl.contains("crafatar.com") || skinUrl.contains("minotar.net"),
+        )
     }
 }

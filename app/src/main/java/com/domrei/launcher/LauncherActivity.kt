@@ -61,6 +61,7 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -69,6 +70,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
@@ -86,14 +88,17 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -115,6 +120,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.RectangleShape
@@ -141,6 +147,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -180,12 +187,14 @@ import com.domrei.skinview.SkinViewer
 import com.domrei.skinview.SkinViewerConfig
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 private const val SKIN_ASSET = "skin.png"
-private const val CAPE_ASSET = "cape.png"
 private val PROGRESS_BAR_EXPANDED_HEIGHT = 264.dp
 
 class LauncherActivity : ComponentActivity() {
@@ -196,7 +205,7 @@ class LauncherActivity : ComponentActivity() {
 
         setContent {
             DomreiLauncherTheme {
-                LauncherScreen()
+                LauncherRoot()
             }
         }
     }
@@ -399,17 +408,50 @@ private fun Modifier.smoothPressClickable(
         )
 }
 
+/**
+ * Root composable: shows the branded splash while the saved content is read, then hands the
+ * preloaded data to [LauncherScreen] so the first frame is fully populated.
+ */
+@Composable
+private fun LauncherRoot() {
+    val context = LocalContext.current
+    var preloaded by remember { mutableStateOf<PreloadedContent?>(null) }
+
+    LaunchedEffect(Unit) {
+        val localContent = async(Dispatchers.IO) { LauncherPreloader.loadLocal(context) }
+        val networkWarmup = async(Dispatchers.IO) { LauncherPreloader.preloadNetwork() }
+        val content = localContent.await()
+        // Give the version-list prefetch a short head start. It keeps running in the
+        // background if the device is offline or slow, so the splash never blocks on it.
+        withTimeoutOrNull(900) { networkWarmup.await() }
+        preloaded = content
+    }
+
+    Crossfade(
+        targetState = preloaded,
+        animationSpec = tween(durationMillis = 320),
+        label = "launcherSplashCrossfade",
+    ) { content ->
+        if (content == null) {
+            LauncherSplashScreen()
+        } else {
+            LauncherScreen(preloaded = content)
+        }
+    }
+}
+
 @Composable
 fun LauncherScreen(
     modifier: Modifier = Modifier,
     backgroundConfig: BackgroundConfig? = null,
+    preloaded: PreloadedContent? = null,
 ) {
     val context = LocalContext.current
     val isInPreview = LocalInspectionMode.current
     val appearancePrefs = remember(context) { AppearancePreferences(context) }
     var currentBackground by remember(backgroundConfig) {
         mutableStateOf(
-            backgroundConfig ?: if (isInPreview) {
+            backgroundConfig ?: preloaded?.backgroundConfig ?: if (isInPreview) {
                 BackgroundConfig(source = BackgroundSource.MinecraftSunset())
             } else {
                 appearancePrefs.loadBackgroundConfig()
@@ -418,7 +460,11 @@ fun LauncherScreen(
     }
     var accentColor by remember {
         mutableStateOf(
-            if (isInPreview) LauncherColorTokens.DefaultAccent else appearancePrefs.loadAccentColor(),
+            if (isInPreview) {
+                LauncherColorTokens.DefaultAccent
+            } else {
+                preloaded?.accentColor ?: appearancePrefs.loadAccentColor()
+            },
         )
     }
     var isImportingBackground by remember { mutableStateOf(false) }
@@ -435,8 +481,19 @@ fun LauncherScreen(
     val gameEngine = remember(context) { DomreiGameEngine(context) }
     val engineStatus by gameEngine.status.collectAsState()
     val selectedRenderer = remember { gameEngine.rendererManager.getSelectedRenderer() }
-    var instances by remember { mutableStateOf(instanceManager.loadInstances()) }
-    var selectedInstanceId by remember { mutableStateOf(instances.firstOrNull()?.id.orEmpty()) }
+    var instances by remember {
+        mutableStateOf(preloaded?.instances ?: instanceManager.loadInstances())
+    }
+    var selectedInstanceId by remember {
+        mutableStateOf(
+            preloaded?.selectedInstanceId
+                ?: instanceManager.loadSelectedInstanceId()
+                    .takeIf { saved -> instances.any { it.id == saved } }
+                ?: instances.firstOrNull()?.id.orEmpty(),
+        )
+    }
+    // Remember the selected instance across app restarts
+    LaunchedEffect(selectedInstanceId) { instanceManager.saveSelectedInstanceId(selectedInstanceId) }
 
     // Dynamic Island-style Install ProgressBar state (strictly for AddInstance)
     var activeInstallTask by remember { mutableStateOf<InstanceInstallTask?>(null) }
@@ -537,21 +594,26 @@ fun LauncherScreen(
         isProgressBarExpanded = false
     }
 
-    val initialAccounts = remember(context) {
-        listOf(
-            LauncherAccount("acc_domrei", context.getString(R.string.default_account_domrei), R.string.account_type_microsoft),
-            LauncherAccount("acc_steve", context.getString(R.string.default_account_steve), R.string.account_type_offline),
-            LauncherAccount("acc_alex", context.getString(R.string.default_account_alex), R.string.account_type_offline),
+    val accountStore = remember(context) { AccountStore(context) }
+    val initialAccounts = remember { preloaded?.accounts ?: accountStore.loadAccounts() }
+    var accounts by remember { mutableStateOf(initialAccounts) }
+    var selectedAccountId by remember {
+        mutableStateOf(
+            preloaded?.selectedAccountId
+                ?: accountStore.loadSelectedAccountId()
+                    .takeIf { saved -> initialAccounts.any { it.id == saved } }
+                ?: initialAccounts.firstOrNull()?.id.orEmpty(),
         )
     }
-    var accounts by remember { mutableStateOf(initialAccounts) }
-    var nextAccountCounter by remember { mutableIntStateOf(initialAccounts.size + 1) }
-    var selectedAccountId by remember { mutableStateOf(initialAccounts.first().id) }
+    // Persist the account list and the current selection across app restarts
+    LaunchedEffect(accounts) { accountStore.saveAccounts(accounts) }
+    LaunchedEffect(selectedAccountId) { accountStore.saveSelectedAccountId(selectedAccountId) }
     val selectedAccount = remember(accounts, selectedAccountId) {
         accounts.firstOrNull { it.id == selectedAccountId } ?: accounts.firstOrNull()
     }
     val defaultPlayerName = stringResource(R.string.default_player_name)
-    val activeUsername = selectedAccount?.username ?: defaultPlayerName
+    val activeUsername = selectedAccount?.username ?: ""
+    val launchUsername = selectedAccount?.username ?: defaultPlayerName
 
     // Full-screen dialog state (Rename Account, Add Account, Add Instance, or any dialog like them)
     var activeDialog by remember { mutableStateOf<LauncherDialog?>(null) }
@@ -570,9 +632,19 @@ fun LauncherScreen(
         label = "dialogBlurRadius",
     )
 
-    // Shared animation clock so the real-time Gaussian-blurred rail backdrop matches the live background
-    val animSpeed = (currentBackground.source as? BackgroundSource.MinecraftSunset)?.animationSpeed ?: 1f
-    val sharedTimeSeconds = rememberBackgroundTimeSeconds(animSpeed)
+    // Shared animation clock so the real-time Gaussian-blurred rail backdrop matches the live background.
+    // Freeze it while a dialog is open: everything behind the dialog is blurred anyway, so this avoids
+    // redrawing the background + re-recording the blurred backdrop every frame during dialog animation.
+    // Static sources (image / solid color) never advance the clock at all — no needless invalidations.
+    val animSpeed = when {
+        activeDialog != null -> 0f
+        else -> when (val source = currentBackground.source) {
+            is BackgroundSource.MinecraftSunset -> source.animationSpeed
+            is BackgroundSource.Gif, is BackgroundSource.Video -> 1f
+            else -> 0f
+        }
+    }
+    val sharedTimeSeconds = rememberBackgroundTimeState(animSpeed)
 
     val importSelectedMedia: (Uri?) -> Unit = { pickedUri ->
         if (pickedUri != null) {
@@ -622,6 +694,20 @@ fun LauncherScreen(
         val progressBackdropLayer = rememberGraphicsLayer()
         val backgroundGraphicsLayer = rememberGraphicsLayer()
         val blurredBackgroundLayer = rememberGraphicsLayer()
+        val blurRecordClockNanos = remember { longArrayOf(0L) }
+        val blurRecordedSize = remember { IntArray(2) }
+        val backgroundRecordedConfig = remember { arrayOfNulls<BackgroundConfig>(1) }
+        val backgroundRecordedSize = remember { IntArray(2) }
+        // Static backgrounds (image / solid color) never change, so the blurred backdrop only needs
+        // to be recorded once per size instead of 30 times per second.
+        val backgroundIsLive = remember(currentBackground.source, animSpeed) {
+            animSpeed > 0f && when (currentBackground.source) {
+                is BackgroundSource.MinecraftSunset,
+                is BackgroundSource.Gif,
+                is BackgroundSource.Video -> true
+                else -> false
+            }
+        }
         var backgroundRootOffset by remember { mutableStateOf(Offset.Zero) }
         var backgroundFrameTick by remember { mutableIntStateOf(0) }
         val progressTransition = updateTransition(
@@ -673,20 +759,27 @@ fun LauncherScreen(
             )
         }
 
-        // Main screen content container: smoothly blurred across the full screen when any dialog is open
+        // Main screen content container: smoothly blurred across the full screen when any dialog is open.
+        // The animated radius is read inside the graphics layer (draw phase) so opening/closing a
+        // dialog only invalidates drawing — it no longer recomposes the whole launcher tree per frame.
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .then(
-                    if (dialogBlurRadius > 0.5.dp) {
-                        Modifier.blur(
-                            radius = dialogBlurRadius,
-                            edgeTreatment = BlurredEdgeTreatment.Rectangle,
+                .graphicsLayer {
+                    val radiusPx = dialogBlurRadius.toPx()
+                    if (radiusPx > 0.5f) {
+                        renderEffect = BlurEffect(
+                            renderEffect = null,
+                            radiusX = radiusPx,
+                            radiusY = radiusPx,
+                            edgeTreatment = TileMode.Clamp,
                         )
+                        compositingStrategy = CompositingStrategy.Offscreen
                     } else {
-                        Modifier
-                    },
-                ),
+                        renderEffect = null
+                        compositingStrategy = CompositingStrategy.Auto
+                    }
+                },
         ) {
             // Scene container recorded into sceneGraphicsLayer so ProgressBar blurs the live panels
             // (Instances, Account, Settings, RightPlayAndSkinPanel) and background underneath it.
@@ -733,8 +826,21 @@ fun LauncherScreen(
                             @Suppress("UNUSED_EXPRESSION")
                             backgroundFrameTick
                             if (!isInPreview) {
-                                backgroundGraphicsLayer.record {
-                                    this@drawWithContent.drawContent()
+                                // Static backgrounds (and the frozen background behind dialogs) are
+                                // recorded once and then reused, instead of re-recording a
+                                // full-screen layer on every vsync.
+                                val bgSizeChanged = backgroundRecordedSize[0] != bgWidthInt ||
+                                    backgroundRecordedSize[1] != bgHeightInt
+                                if (backgroundIsLive ||
+                                    bgSizeChanged ||
+                                    backgroundRecordedConfig[0] != currentBackground
+                                ) {
+                                    backgroundGraphicsLayer.record {
+                                        this@drawWithContent.drawContent()
+                                    }
+                                    backgroundRecordedConfig[0] = currentBackground
+                                    backgroundRecordedSize[0] = bgWidthInt
+                                    backgroundRecordedSize[1] = bgHeightInt
                                 }
                                 drawLayer(backgroundGraphicsLayer)
 
@@ -743,10 +849,24 @@ fun LauncherScreen(
                                     if (blurredBackgroundLayer.renderEffect != panelBlurEffect) {
                                         blurredBackgroundLayer.renderEffect = panelBlurEffect
                                     }
-                                    blurredBackgroundLayer.record(
-                                        size = IntSize(bgWidthInt, bgHeightInt),
-                                    ) {
-                                        drawLayer(backgroundGraphicsLayer)
+                                    // Re-blur at ~30 fps instead of every vsync: the frosted panels
+                                    // only need a smooth backdrop, while a full-screen 20dp blur
+                                    // each frame is very expensive and causes startup jank. Static
+                                    // backgrounds re-record only when the layer size changes.
+                                    val nowNanos = System.nanoTime()
+                                    val sizeChanged = blurRecordedSize[0] != bgWidthInt ||
+                                        blurRecordedSize[1] != bgHeightInt
+                                    val blurIntervalNanos =
+                                        if (backgroundIsLive) 33_000_000L else Long.MAX_VALUE
+                                    if (sizeChanged || nowNanos - blurRecordClockNanos[0] >= blurIntervalNanos) {
+                                        blurRecordClockNanos[0] = nowNanos
+                                        blurRecordedSize[0] = bgWidthInt
+                                        blurRecordedSize[1] = bgHeightInt
+                                        blurredBackgroundLayer.record(
+                                            size = IntSize(bgWidthInt, bgHeightInt),
+                                        ) {
+                                            drawLayer(backgroundGraphicsLayer)
+                                        }
                                     }
                                 }
                             } else {
@@ -802,6 +922,8 @@ fun LauncherScreen(
                 selectedAccountId = selectedAccountId,
                 onAccountSelect = { account -> selectedAccountId = account.id },
                 onAddAccountClick = {
+                    // Start with an empty name; the Add button stays disabled until one is typed
+                    dialogInputText = ""
                     activeDialog = LauncherDialog.ChooseAccountType
                 },
                 onRequestRenameAccount = { account ->
@@ -836,6 +958,7 @@ fun LauncherScreen(
                 blurredBackgroundLayer = sharedPanelBackdropLayer,
                 backgroundRootOffset = backgroundRootOffset,
                 backgroundFrameTick = { backgroundFrameTick },
+                isSuspended = activeDialog != null,
                 modifier = Modifier.align(Alignment.CenterStart),
             )
 
@@ -874,6 +997,7 @@ fun LauncherScreen(
                     activeUsername = activeUsername,
                     isChangePanelOpen = isChangePanelOpen,
                     onChangeToggle = { isChangePanelOpen = !isChangePanelOpen },
+                    isSuspended = activeDialog != null,
                     onPlayClick = {
                         if (engineStatus.state == GameEngineState.RUNNING) {
                             gameEngine.stopActiveGame()
@@ -903,8 +1027,9 @@ fun LauncherScreen(
                                         loaderVersion = targetInstance.loaderVersion,
                                         minecraftRootDir = instanceManager.rootDir,
                                         instanceGameDir = instanceManager.gameDirFor(targetInstance.id),
-                                        username = activeUsername,
-                                        uuid = selectedAccount?.uuid ?: GameLaunchRequest.generateOfflineUuid(activeUsername),
+                                        username = launchUsername,
+                                        uuid = selectedAccount?.uuid
+                                            ?: GameLaunchRequest.generateOfflineUuid(launchUsername),
                                         accessToken = selectedAccount?.accessToken ?: "0",
                                         preferredRenderer = selectedRenderer,
                                     )
@@ -1072,21 +1197,33 @@ fun LauncherScreen(
         ) {
             when (val dialog = displayedDialog) {
                 is LauncherDialog.RenameAccount -> {
+                    val trimmedName = dialogInputText.trim()
+                    val renameError = if (trimmedName.isEmpty()) {
+                        null
+                    } else {
+                        validateUsername(
+                            username = trimmedName,
+                            accounts = accounts,
+                            ignoreAccountId = dialog.account.id,
+                        )
+                    }
                     LauncherTextInputDialogContent(
                         title = stringResource(R.string.rename_account),
                         value = dialogInputText,
                         onValueChange = { dialogInputText = it },
                         confirmText = stringResource(R.string.action_save),
+                        label = stringResource(R.string.label_username),
                         onFocusChange = { isDialogInputFocused = it },
+                        errorText = renameError?.let { stringResource(it.messageRes) },
+                        confirmEnabled = trimmedName.isNotEmpty() && renameError == null,
                         onCancel = { activeDialog = null },
                         onConfirm = {
-                            val trimmed = dialogInputText.trim()
-                            if (trimmed.isNotEmpty()) {
+                            if (trimmedName.isNotEmpty() && renameError == null) {
                                 accounts = accounts.map {
-                                    if (it.id == dialog.account.id) it.copy(username = trimmed) else it
+                                    if (it.id == dialog.account.id) it.copy(username = trimmedName) else it
                                 }
+                                activeDialog = null
                             }
-                            activeDialog = null
                         },
                     )
                 }
@@ -1127,8 +1264,8 @@ fun LauncherScreen(
                     ChooseAccountTypeDialogContent(
                         onCancel = { activeDialog = null },
                         onSelectOffline = {
-                            val num = nextAccountCounter++
-                            dialogInputText = context.getString(R.string.default_new_player_format, num)
+                            // Start with an empty name; Add stays disabled until one is typed.
+                            dialogInputText = ""
                             isDialogInputFocused = false
                             activeDialog = LauncherDialog.AddOfflineAccount
                         },
@@ -1139,32 +1276,43 @@ fun LauncherScreen(
                     )
                 }
                 is LauncherDialog.AddOfflineAccount -> {
+                    val trimmedName = dialogInputText.trim()
+                    val addError = if (trimmedName.isEmpty()) {
+                        null
+                    } else {
+                        validateUsername(username = trimmedName, accounts = accounts)
+                    }
                     LauncherTextInputDialogContent(
                         title = stringResource(R.string.dialog_add_offline_account_title),
                         value = dialogInputText,
                         onValueChange = { dialogInputText = it },
                         confirmText = stringResource(R.string.action_add),
+                        label = stringResource(R.string.label_username),
                         onFocusChange = { isDialogInputFocused = it },
+                        errorText = addError?.let { stringResource(it.messageRes) },
+                        confirmEnabled = trimmedName.isNotEmpty() && addError == null,
                         onCancel = { activeDialog = null },
                         onConfirm = {
-                            val num = nextAccountCounter++
-                            val trimmed = dialogInputText.trim().ifEmpty {
-                                context.getString(R.string.default_new_player_format, num)
+                            if (trimmedName.isNotEmpty() && addError == null) {
+                                val newAcc = LauncherAccount(
+                                    id = "acc_${System.currentTimeMillis()}_${accounts.size}",
+                                    username = trimmedName,
+                                    typeRes = R.string.account_type_offline,
+                                )
+                                accounts = accounts + newAcc
+                                selectedAccountId = newAcc.id
+                                activeDialog = null
                             }
-                            val newAcc = LauncherAccount(
-                                id = "acc_$num",
-                                username = trimmed,
-                                typeRes = R.string.account_type_offline,
-                            )
-                            accounts = accounts + newAcc
-                            selectedAccountId = newAcc.id
-                            activeDialog = null
                         },
                     )
                 }
                 is LauncherDialog.AddInstance -> {
                     AddInstanceDialogContent(
                         onFocusChange = { isDialogInputFocused = it },
+                        existingInstanceNames = buildSet {
+                            instances.forEach { add(it.name) }
+                            activeInstallTask?.instanceName?.let { add(it) }
+                        },
                         onCancel = { activeDialog = null },
                         onInstall = { loaderType, mcVersion, loaderVersion, enteredName ->
                             val fallbackName = if (loaderType == InstanceLoaderType.FABRIC && loaderVersion != null) {
@@ -1326,31 +1474,98 @@ fun FullScreenBlurDialog(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+/**
+ * Material 3 outlined text field, built from the official low-level building blocks
+ * ([BasicTextField] + [OutlinedTextFieldDefaults.DecorationBox] + [OutlinedTextFieldDefaults.Container])
+ * so it stays compact while keeping the stock behavior: the label rests inside as a placeholder,
+ * floats up with the standard animation, and the top stroke gets a real notched gap around it.
+ * The container fill is transparent so the glass dialog shows through the notch cleanly.
+ */
+private fun LauncherFloatingLabelInput(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+    onFocusChange: (Boolean) -> Unit = {},
+    imeAction: ImeAction = ImeAction.Done,
+    onDone: () -> Unit = {},
+) {
+    val colors = LauncherTheme.colors
+    val interactionSource = remember { MutableInteractionSource() }
+
+    val fieldColors = OutlinedTextFieldDefaults.colors(
+        focusedTextColor = colors.textPrimary,
+        unfocusedTextColor = colors.textPrimary,
+        cursorColor = colors.accent,
+        focusedBorderColor = colors.accent,
+        unfocusedBorderColor = colors.borderModal,
+        focusedLabelColor = colors.accent,
+        unfocusedLabelColor = colors.textDim,
+    )
+
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        singleLine = true,
+        textStyle = TextStyle(
+            color = colors.textPrimary,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+        ),
+        keyboardOptions = KeyboardOptions(imeAction = imeAction),
+        keyboardActions = KeyboardActions(onDone = { onDone() }),
+        cursorBrush = SolidColor(colors.accent),
+        interactionSource = interactionSource,
+        modifier = modifier
+            .fillMaxWidth()
+            .onFocusChanged { onFocusChange(it.isFocused) },
+    ) { innerTextField ->
+        OutlinedTextFieldDefaults.DecorationBox(
+            value = value,
+            innerTextField = innerTextField,
+            enabled = true,
+            singleLine = true,
+            visualTransformation = VisualTransformation.None,
+            interactionSource = interactionSource,
+            label = { Text(text = label, maxLines = 1) },
+            colors = fieldColors,
+            contentPadding = PaddingValues(
+                start = 14.dp,
+                top = 10.dp,
+                end = 14.dp,
+                bottom = 10.dp,
+            ),
+            container = {
+                OutlinedTextFieldDefaults.Container(
+                    enabled = true,
+                    isError = false,
+                    interactionSource = interactionSource,
+                    colors = fieldColors,
+                    shape = RoundedCornerShape(12.dp),
+                )
+            },
+        )
+    }
+}
+
 @Composable
 private fun LauncherTextInputDialogContent(
     title: String,
     value: String,
     onValueChange: (String) -> Unit,
     confirmText: String,
+    label: String,
     onFocusChange: (Boolean) -> Unit = {},
     onCancel: () -> Unit,
     onConfirm: () -> Unit,
+    errorText: String? = null,
+    confirmEnabled: Boolean = true,
 ) {
     val colors = LauncherTheme.colors
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
-    var isFocused by remember { mutableStateOf(false) }
-
-    val inputBorderColor by animateColorAsState(
-        targetValue = if (isFocused) colors.accentBorderStrong else colors.borderModal,
-        animationSpec = tween(durationMillis = 200),
-        label = "inputBorderColor",
-    )
-    val inputBgColor by animateColorAsState(
-        targetValue = if (isFocused) colors.surfaceInputFocused else colors.surfaceInput,
-        animationSpec = tween(durationMillis = 200),
-        label = "inputBgColor",
-    )
 
     val modalShape = RoundedCornerShape(18.dp)
     Column(
@@ -1380,35 +1595,27 @@ private fun LauncherTextInputDialogContent(
             ),
         )
 
-        val inputShape = RoundedCornerShape(12.dp)
-        BasicTextField(
+        LauncherFloatingLabelInput(
             value = value,
             onValueChange = onValueChange,
-            singleLine = true,
-            textStyle = TextStyle(
-                color = colors.textPrimary,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium,
-            ),
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(
-                onDone = {
-                    focusManager.clearFocus(force = true)
-                    keyboardController?.hide()
-                },
-            ),
-            cursorBrush = SolidColor(colors.accent),
-            modifier = Modifier
-                .fillMaxWidth()
-                .onFocusChanged {
-                    isFocused = it.isFocused
-                    onFocusChange(it.isFocused)
-                }
-                .clip(inputShape)
-                .background(inputBgColor)
-                .border(1.dp, inputBorderColor, inputShape)
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+            label = label,
+            onFocusChange = onFocusChange,
+            onDone = {
+                focusManager.clearFocus(force = true)
+                keyboardController?.hide()
+            },
         )
+
+        if (!errorText.isNullOrBlank()) {
+            Text(
+                text = errorText,
+                color = colors.errorText,
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                ),
+            )
+        }
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1444,6 +1651,7 @@ private fun LauncherTextInputDialogContent(
             Box(
                 modifier = Modifier
                     .smoothPressClickable(
+                        enabled = confirmEnabled,
                         pressScale = 0.94f,
                         onClick = {
                             focusManager.clearFocus(force = true)
@@ -1452,13 +1660,19 @@ private fun LauncherTextInputDialogContent(
                         },
                     )
                     .clip(btnShape)
-                    .background(colors.surfaceButtonSelected)
-                    .border(1.dp, colors.borderSelectedCard, btnShape)
+                    .background(
+                        if (confirmEnabled) colors.surfaceButtonSelected else colors.surfaceButtonDisabled,
+                    )
+                    .border(
+                        1.dp,
+                        if (confirmEnabled) colors.borderSelectedCard else colors.borderSubtle,
+                        btnShape,
+                    )
                     .padding(horizontal = 14.dp, vertical = 8.dp),
             ) {
                 Text(
                     text = confirmText,
-                    color = colors.accent,
+                    color = if (confirmEnabled) colors.accent else colors.textActionDisabled,
                     style = MaterialTheme.typography.labelLarge.copy(
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
@@ -2231,6 +2445,7 @@ private fun AccentColorPickerDialogContent(
 private fun AddInstanceDialogContent(
     onFocusChange: (Boolean) -> Unit = {},
     onCancel: () -> Unit,
+    existingInstanceNames: Set<String> = emptySet(),
     onInstall: (loaderType: InstanceLoaderType, mcVersion: String, loaderVersion: String?, instanceName: String) -> Unit,
 ) {
     val colors = LauncherTheme.colors
@@ -2243,7 +2458,6 @@ private fun AddInstanceDialogContent(
     var selectedMcVersion by remember { mutableStateOf("") }
     var selectedLoaderVersion by remember { mutableStateOf("") }
     var instanceNameInput by remember { mutableStateOf("") }
-    var isNameFieldFocused by remember { mutableStateOf(false) }
 
     // Official Mojang manifest & Fabric supported game versions state
     var versionManifest by remember { mutableStateOf<MinecraftVersionManifest?>(null) }
@@ -2967,21 +3181,16 @@ private fun AddInstanceDialogContent(
                 }
 
                 is AddInstanceStep.EnterInstanceName -> {
-                    val inputBorderColor by animateColorAsState(
-                        targetValue = if (isNameFieldFocused) colors.accentBorderStrong else colors.borderModal,
-                        animationSpec = tween(durationMillis = 200),
-                        label = "instanceNameBorderColor",
-                    )
-                    val inputBgColor by animateColorAsState(
-                        targetValue = if (isNameFieldFocused) colors.surfaceInputFocused else colors.surfaceInput,
-                        animationSpec = tween(durationMillis = 200),
-                        label = "instanceNameBgColor",
-                    )
                     val badgeText = if (step.loaderType == InstanceLoaderType.FABRIC && step.loaderVersion != null) {
                         context.getString(R.string.instance_fabric_format, step.mcVersion, step.loaderVersion)
                     } else {
                         step.mcVersion
                     }
+                    // Install stays disabled while the name is empty; typed names must also be unique.
+                    val trimmedInstanceName = instanceNameInput.trim()
+                    val isDuplicateName = trimmedInstanceName.isNotEmpty() &&
+                        existingInstanceNames.any { it.equals(trimmedInstanceName, ignoreCase = true) }
+                    val canInstall = trimmedInstanceName.isNotEmpty() && !isDuplicateName
 
                     Column(
                         modifier = Modifier.fillMaxWidth(),
@@ -3025,35 +3234,28 @@ private fun AddInstanceDialogContent(
                             }
                         }
 
-                        val inputShape = RoundedCornerShape(12.dp)
-                        BasicTextField(
+                        LauncherFloatingLabelInput(
                             value = instanceNameInput,
                             onValueChange = { instanceNameInput = it },
-                            singleLine = true,
-                            textStyle = TextStyle(
-                                color = colors.textPrimary,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Medium,
-                            ),
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                            keyboardActions = KeyboardActions(
-                                onDone = {
-                                    focusManager.clearFocus(force = true)
-                                    keyboardController?.hide()
-                                },
-                            ),
-                            cursorBrush = SolidColor(colors.accent),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .onFocusChanged {
-                                    isNameFieldFocused = it.isFocused
-                                    onFocusChange(it.isFocused)
-                                }
-                                .clip(inputShape)
-                                .background(inputBgColor)
-                                .border(1.dp, inputBorderColor, inputShape)
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            label = stringResource(R.string.label_instance_name),
+                            onFocusChange = onFocusChange,
+                            onDone = {
+                                focusManager.clearFocus(force = true)
+                                keyboardController?.hide()
+                                onFocusChange(false)
+                            },
                         )
+
+                        if (isDuplicateName) {
+                            Text(
+                                text = stringResource(R.string.instance_name_duplicate),
+                                color = colors.errorText,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium,
+                                ),
+                            )
+                        }
 
                         // Left: Back button; Right: Install button
                         Row(
@@ -3095,8 +3297,10 @@ private fun AddInstanceDialogContent(
                             Box(
                                 modifier = Modifier
                                     .smoothPressClickable(
+                                        enabled = canInstall,
                                         pressScale = 0.94f,
                                         onClick = {
+                                            if (!canInstall) return@smoothPressClickable
                                             focusManager.clearFocus(force = true)
                                             keyboardController?.hide()
                                             onFocusChange(false)
@@ -3109,13 +3313,19 @@ private fun AddInstanceDialogContent(
                                         },
                                     )
                                     .clip(btnShape)
-                                    .background(colors.surfaceButtonSelected)
-                                    .border(1.dp, colors.borderSelectedCard, btnShape)
+                                    .background(
+                                        if (canInstall) colors.surfaceButtonSelected else colors.surfaceButtonSubtle,
+                                    )
+                                    .border(
+                                        width = 1.dp,
+                                        color = if (canInstall) colors.borderSelectedCard else colors.borderButton,
+                                        shape = btnShape,
+                                    )
                                     .padding(horizontal = 16.dp, vertical = 9.dp),
                             ) {
                                 Text(
                                     text = stringResource(R.string.action_install),
-                                    color = colors.accent,
+                                    color = if (canInstall) colors.accent else colors.textActionDisabled,
                                     style = MaterialTheme.typography.labelLarge.copy(
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Bold,
@@ -3225,7 +3435,7 @@ fun ProgressBar(
     screenWidth: Dp,
     screenHeight: Dp,
     backgroundConfig: BackgroundConfig,
-    sharedTimeSeconds: Float,
+    sharedTimeSeconds: State<Float>,
     modifier: Modifier = Modifier,
     onCancelTask: () -> Unit = {},
     sceneGraphicsLayer: GraphicsLayer? = null,
@@ -3675,7 +3885,7 @@ private fun BoxScope.FrostedGlassBackdrop(
     blurredBackgroundLayer: GraphicsLayer?,
     backgroundRootOffset: Offset,
     backgroundFrameTick: () -> Int,
-    sharedTimeSeconds: Float,
+    sharedTimeSeconds: State<Float>,
     backgroundConfig: BackgroundConfig,
     screenWidth: Dp,
     screenHeight: Dp,
@@ -3701,7 +3911,7 @@ private fun BoxScope.FrostedGlassBackdrop(
                 },
         ) {
             @Suppress("UNUSED_EXPRESSION")
-            sharedTimeSeconds
+            sharedTimeSeconds.value
             @Suppress("UNUSED_EXPRESSION")
             backgroundFrameTick()
             translate(
@@ -3779,11 +3989,12 @@ fun UnifiedLeftRailAndPanel(
     screenWidth: Dp,
     screenHeight: Dp,
     backgroundConfig: BackgroundConfig,
-    sharedTimeSeconds: Float,
+    sharedTimeSeconds: State<Float>,
     modifier: Modifier = Modifier,
     blurredBackgroundLayer: GraphicsLayer? = null,
     backgroundRootOffset: Offset = Offset.Zero,
     backgroundFrameTick: () -> Int = { 0 },
+    isSuspended: Boolean = false,
 ) {
     val colors = LauncherTheme.colors
     val outerMargin = 5.dp
@@ -3942,6 +4153,7 @@ fun UnifiedLeftRailAndPanel(
                                     onAddAccountClick = onAddAccountClick,
                                     onRequestRenameAccount = onRequestRenameAccount,
                                     onRemoveAccount = onRemoveAccount,
+                                    isSuspended = isSuspended,
                                 )
                                 LauncherDestination.SETTINGS -> SettingsPanelContent(
                                     backgroundConfig = backgroundConfig,
@@ -4178,6 +4390,23 @@ private fun InstancesPanelContent(
 }
 
 /**
+ * Default no-account skin: the bundled account skin desaturated to gray and converted
+ * to the classic (4px arm) model. Falls back to the procedural gray classic skin.
+ */
+@Composable
+private fun rememberNoAccountSkin(): Bitmap {
+    val context = LocalContext.current
+    return remember(context) {
+        runCatching {
+            val base = SkinUtils.normalizeSkin(SkinUtils.fromAsset(context, SKIN_ASSET))
+            SkinUtils.toGrayscale(SkinUtils.toClassicModel(base))
+        }
+            .onFailure { Log.w("LauncherScreen", "No usable $SKIN_ASSET, using gray placeholder", it) }
+            .getOrElse { DefaultSkin.createPlaceholder() }
+    }
+}
+
+/**
  * Extracts the 8x8 front head face (8, 8) + 8x8 hat overlay (40, 8) from a 64x64 Minecraft skin bitmap.
  */
 private fun extractSkinHeadBitmap(skinBitmap: Bitmap): ImageBitmap {
@@ -4208,30 +4437,27 @@ private fun AccountPanelContent(
     onAddAccountClick: () -> Unit,
     onRequestRenameAccount: (LauncherAccount) -> Unit,
     onRemoveAccount: (LauncherAccount) -> Unit,
+    isSuspended: Boolean = false,
 ) {
     val colors = LauncherTheme.colors
     val context = LocalContext.current
-    val skin = remember {
-        runCatching { SkinUtils.fromAsset(context, SKIN_ASSET) }
-            .mapCatching { SkinUtils.normalizeSkin(it) }
-            .onFailure { Log.w("AccountPanel", "No usable $SKIN_ASSET, using default skin", it) }
-            .getOrElse { DefaultSkin.create() }
-    }
-    val skinHeadBitmap = remember(skin) {
-        extractSkinHeadBitmap(skin)
-    }
-    val cape = remember {
-        runCatching { SkinUtils.fromAsset(context, CAPE_ASSET) }
-            .mapCatching { SkinUtils.normalizeCape(it) }
-            .onFailure { Log.w("AccountPanel", "No usable $CAPE_ASSET, using default cape", it) }
-            .getOrElse { DefaultSkin.createCape() }
-    }
-
     val selectedAccount = remember(accounts, selectedAccountId) {
         accounts.firstOrNull { it.id == selectedAccountId } ?: accounts.firstOrNull()
     }
-    val defaultPlayerName = stringResource(R.string.default_player_name)
-    val previewUsername = selectedAccount?.username ?: defaultPlayerName
+    val hasAccount = selectedAccount != null
+    val accountSkin = remember {
+        runCatching { SkinUtils.fromAsset(context, SKIN_ASSET) }
+            .mapCatching { SkinUtils.toClassicModel(SkinUtils.normalizeSkin(it)) }
+            .onFailure { Log.w("AccountPanel", "No usable $SKIN_ASSET, using default skin", it) }
+            .getOrElse { DefaultSkin.create() }
+    }
+    // No account -> the account skin, grayed out and converted to the classic model. No capes.
+    val skin = if (hasAccount) accountSkin else rememberNoAccountSkin()
+    val skinHeadBitmap = remember(skin) {
+        extractSkinHeadBitmap(skin)
+    }
+    val cape: Bitmap? = null
+    val previewUsername = selectedAccount?.username ?: ""
 
     // Account ID whose {•••} options menu is currently expanded
     var openOptionsAccountId by remember { mutableStateOf<String?>(null) }
@@ -4585,6 +4811,7 @@ private fun AccountPanelContent(
                         skin = skin,
                         cape = cape,
                         config = accountSkinConfig,
+                        paused = isSuspended,
                     )
 
                     Box(
@@ -4615,26 +4842,25 @@ fun RightPlayAndSkinPanel(
     screenWidth: Dp,
     screenHeight: Dp,
     backgroundConfig: BackgroundConfig,
-    sharedTimeSeconds: Float,
+    sharedTimeSeconds: State<Float>,
     modifier: Modifier = Modifier,
     blurredBackgroundLayer: GraphicsLayer? = null,
     backgroundRootOffset: Offset = Offset.Zero,
     backgroundFrameTick: () -> Int = { 0 },
+    isSuspended: Boolean = false,
 ) {
     val colors = LauncherTheme.colors
     val context = LocalContext.current
-    val skin = remember {
+    // No account -> the account skin grayed out in the classic model; capes are never shown.
+    val hasAccount = activeUsername.isNotBlank()
+    val accountSkin = remember {
         runCatching { SkinUtils.fromAsset(context, SKIN_ASSET) }
-            .mapCatching { SkinUtils.normalizeSkin(it) }
+            .mapCatching { SkinUtils.toClassicModel(SkinUtils.normalizeSkin(it)) }
             .onFailure { Log.w("LauncherScreen", "No usable $SKIN_ASSET, using default skin", it) }
-            .getOrNull()
+            .getOrElse { DefaultSkin.create() }
     }
-    val cape = remember {
-        runCatching { SkinUtils.fromAsset(context, CAPE_ASSET) }
-            .mapCatching { SkinUtils.normalizeCape(it) }
-            .onFailure { Log.w("LauncherScreen", "No usable $CAPE_ASSET, using default cape", it) }
-            .getOrElse { DefaultSkin.createCape() }
-    }
+    val skin = if (hasAccount) accountSkin else rememberNoAccountSkin()
+    val cape: Bitmap? = null
 
     val skinConfig = remember(activeUsername) {
         SkinViewerConfig(
@@ -4828,6 +5054,14 @@ fun RightPlayAndSkinPanel(
                         instances.forEach { instance ->
                             val isSelected = instance.id == selectedInstanceId
                             val instanceName = instance.name
+                            val instanceSubtitle = if (
+                                instance.loaderType == InstanceLoaderType.FABRIC &&
+                                !instance.loaderVersion.isNullOrBlank()
+                            ) {
+                                stringResource(R.string.instance_subtitle_fabric, instance.mcVersion, instance.loaderVersion)
+                            } else {
+                                stringResource(R.string.instance_subtitle_vanilla, instance.mcVersion)
+                            }
                             val itemShape = RoundedCornerShape(14.dp)
                             val itemBg by animateColorAsState(
                                 targetValue = if (isSelected) colors.surfaceCardSelected else colors.surfaceCard,
@@ -4866,16 +5100,28 @@ fun RightPlayAndSkinPanel(
                                     modifier = Modifier.size(22.dp),
                                 )
                                 Spacer(modifier = Modifier.width(10.dp))
-                                Text(
-                                    text = instanceName,
-                                    color = itemContentColor,
-                                    style = MaterialTheme.typography.bodyMedium.copy(
-                                        fontSize = 13.sp,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                    ),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
+                                Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                                    Text(
+                                        text = instanceName,
+                                        color = itemContentColor,
+                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                            fontSize = 13.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                        ),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        text = instanceSubtitle,
+                                        color = colors.white.copy(alpha = 0.52f),
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Medium,
+                                        ),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
                             }
                         }
                     }
@@ -4904,6 +5150,7 @@ fun RightPlayAndSkinPanel(
                     skin = skin,
                     cape = cape,
                     config = skinConfig,
+                    paused = isSuspended,
                 )
             }
 
@@ -5309,7 +5556,7 @@ private fun SettingsPanelContent(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    // Top Card: Custom Background -> [{image/video}        {reset}]
+                    // Appearance Card: Background + Accent Color separated by a divider line
                     AppearanceSettingsCard(
                         title = stringResource(R.string.settings_bg_title),
                         modifier = Modifier.fillMaxWidth(),
@@ -5347,13 +5594,22 @@ private fun SettingsPanelContent(
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
-                    }
 
-                    // Bottom Card: Accent Color -> [{current color}            {reset}]
-                    AppearanceSettingsCard(
-                        title = stringResource(R.string.settings_accent_title),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
+                        // Divider line between the Background and Accent Color sections
+                        PanelHeaderDivider()
+
+                        // Accent Color section -> [{current color}            {reset}]
+                        Text(
+                            text = stringResource(R.string.settings_accent_title),
+                            color = colors.textPrimary,
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+
                         AppearanceSelectorResetRow(
                             label = accentHex,
                             resetEnabled = !isDefaultAccent,

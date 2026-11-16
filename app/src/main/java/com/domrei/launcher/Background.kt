@@ -21,6 +21,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -102,22 +103,36 @@ data class BackgroundConfig(
  * (such as the navigation rail) stay 100% in sync with the live background canvas.
  */
 @Composable
-fun rememberBackgroundTimeSeconds(animationSpeed: Float = 1f): Float {
-    var timeSeconds by remember { mutableFloatStateOf(0f) }
+fun rememberBackgroundTimeState(animationSpeed: Float = 1f): State<Float> {
+    val timeSeconds = remember { mutableFloatStateOf(0f) }
     LaunchedEffect(animationSpeed) {
         var lastNanos = -1L
+        // The scene is slow parallax, so 30 fps is visually identical to 60 fps while
+        // halving the cost of redrawing the full-screen background + its blurred copy.
+        val frameIntervalNanos = 33_000_000L
+        var accumulatorSeconds = 0f
         while (isActive) {
             withFrameNanos { frameNanos ->
                 if (lastNanos >= 0L) {
-                    val dt = ((frameNanos - lastNanos) / 1_000_000_000f).coerceIn(0f, 0.1f)
-                    timeSeconds += dt * animationSpeed
+                    accumulatorSeconds +=
+                        ((frameNanos - lastNanos) / 1_000_000_000f).coerceIn(0f, 0.1f)
                 }
                 lastNanos = frameNanos
+                if (accumulatorSeconds >= frameIntervalNanos / 1_000_000_000f) {
+                    if (animationSpeed != 0f) {
+                        timeSeconds.floatValue += accumulatorSeconds * animationSpeed
+                    }
+                    accumulatorSeconds = 0f
+                }
             }
         }
     }
     return timeSeconds
 }
+
+@Composable
+fun rememberBackgroundTimeSeconds(animationSpeed: Float = 1f): Float =
+    rememberBackgroundTimeState(animationSpeed).value
 
 /**
  * Root background composable for the launcher.
@@ -128,7 +143,7 @@ fun rememberBackgroundTimeSeconds(animationSpeed: Float = 1f): Float {
 fun LauncherBackground(
     modifier: Modifier = Modifier,
     config: BackgroundConfig = BackgroundConfig(),
-    sharedTimeSeconds: Float? = null,
+    sharedTimeSeconds: State<Float>? = null,
     onMediaFrameRendered: (() -> Unit)? = null,
 ) {
     Box(modifier = modifier.fillMaxSize()) {
@@ -172,14 +187,15 @@ private data class CloudSpec(val baseXFrac: Float, val yFrac: Float, val speed: 
 fun MinecraftSunsetBackground(
     modifier: Modifier = Modifier,
     source: BackgroundSource.MinecraftSunset = BackgroundSource.MinecraftSunset(),
-    sharedTimeSeconds: Float? = null,
+    sharedTimeSeconds: State<Float>? = null,
 ) {
     val internalTime = if (sharedTimeSeconds == null) {
-        rememberBackgroundTimeSeconds(source.animationSpeed)
+        rememberBackgroundTimeState(source.animationSpeed)
     } else {
-        0f
+        null
     }
-    val timeSeconds = sharedTimeSeconds ?: internalTime
+    // Read in the draw phase only, so the animation clock never triggers recomposition.
+    val timeState = sharedTimeSeconds ?: internalTime!!
 
     val stars = remember {
         listOf(
@@ -288,6 +304,7 @@ fun MinecraftSunsetBackground(
     }
 
     Canvas(modifier = modifier) {
+        val timeSeconds = timeState.value
         val w = size.width
         val h = size.height
         if (w <= 0f || h <= 0f) return@Canvas

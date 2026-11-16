@@ -347,6 +347,7 @@ data class InstanceInstallTask(
     val loaderVersion: String?,
     val isInstanceInstall: Boolean = true,
     val customStatusTitle: String? = null,
+    val customIconRes: Int? = null,
 )
 
 data class LauncherAccount(
@@ -730,6 +731,7 @@ fun LauncherScreen(
                 loaderVersion = null,
                 isInstanceInstall = false,
                 customStatusTitle = context.getString(R.string.microsoft_login_title),
+                customIconRes = R.drawable.ic_microsoft,
             )
             authSnapshot = InstallProgressSnapshot(
                 progress = 0.15f,
@@ -833,6 +835,7 @@ fun LauncherScreen(
                     loaderVersion = null,
                     isInstanceInstall = false,
                     customStatusTitle = context.getString(R.string.microsoft_refreshing_title),
+                    customIconRes = R.drawable.ic_microsoft,
                 )
                 authSnapshot = InstallProgressSnapshot(
                     progress = 0.15f,
@@ -3709,12 +3712,20 @@ fun ProgressBar(
                         modifier = Modifier.weight(1f),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        InstanceLoaderIcon(
-                            loaderType = task.loaderType,
-                            contentDescription = statusTitle,
-                            defaultTint = statusAccentColor,
-                            modifier = Modifier.size(16.dp),
-                        )
+                        if (task.customIconRes != null) {
+                            Image(
+                                painter = painterResource(id = task.customIconRes),
+                                contentDescription = statusTitle,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        } else {
+                            InstanceLoaderIcon(
+                                loaderType = task.loaderType,
+                                contentDescription = statusTitle,
+                                defaultTint = statusAccentColor,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = statusTitle,
@@ -3777,12 +3788,20 @@ fun ProgressBar(
                             modifier = Modifier.weight(1f),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            InstanceLoaderIcon(
-                                loaderType = task.loaderType,
-                                contentDescription = statusTitle,
-                                defaultTint = statusAccentColor,
-                                modifier = Modifier.size(18.dp),
-                            )
+                            if (task.customIconRes != null) {
+                                Image(
+                                    painter = painterResource(id = task.customIconRes),
+                                    contentDescription = statusTitle,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            } else {
+                                InstanceLoaderIcon(
+                                    loaderType = task.loaderType,
+                                    contentDescription = statusTitle,
+                                    defaultTint = statusAccentColor,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = statusTitle,

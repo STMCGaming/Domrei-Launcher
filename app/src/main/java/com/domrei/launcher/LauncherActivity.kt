@@ -621,10 +621,10 @@ fun LauncherScreen(
         accounts.firstOrNull { it.id == selectedAccountId } ?: accounts.firstOrNull()
     }
 
-    // Auto-sync official Minecraft skin in background if not already cached
+    // Auto-sync official Minecraft skin in background for Microsoft accounts if not already cached
     LaunchedEffect(selectedAccount?.id) {
         val acc = selectedAccount ?: return@LaunchedEffect
-        if (!AccountSkinManager.hasSkin(context, acc)) {
+        if (AccountSkinManager.isMicrosoftAccount(acc) && !AccountSkinManager.hasSkin(context, acc)) {
             val synced = AccountSkinManager.syncAccountSkin(context, acc)
             if (synced != null) {
                 skinRefreshKey++
@@ -634,7 +634,7 @@ fun LauncherScreen(
     LaunchedEffect(accounts) {
         var anySynced = false
         accounts.forEach { acc ->
-            if (!AccountSkinManager.hasSkin(context, acc)) {
+            if (AccountSkinManager.isMicrosoftAccount(acc) && !AccountSkinManager.hasSkin(context, acc)) {
                 val synced = AccountSkinManager.syncAccountSkin(context, acc)
                 if (synced != null) {
                     anySynced = true

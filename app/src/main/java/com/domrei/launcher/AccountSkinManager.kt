@@ -17,6 +17,12 @@ object AccountSkinManager {
     private const val SKINS_DIR = "skins"
     private const val DEFAULT_SKIN_ASSET = "skin.png"
 
+    fun isMicrosoftAccount(account: LauncherAccount?): Boolean {
+        return account != null &&
+            account.typeRes == R.string.account_type_microsoft &&
+            !account.uuid.isNullOrBlank()
+    }
+
     fun getSkinsDirectory(context: Context): File {
         val dir = File(context.filesDir, SKINS_DIR)
         if (!dir.exists()) dir.mkdirs()
@@ -28,21 +34,15 @@ object AccountSkinManager {
         return File(getSkinsDirectory(context), "${safeKey}.png")
     }
 
-    fun getSkinCandidates(account: LauncherAccount): List<String> = buildList {
-        add(account.id)
+    fun getSkinCandidates(account: LauncherAccount): List<String> {
+        if (!isMicrosoftAccount(account)) return emptyList()
         val uuid = account.uuid?.trim().orEmpty()
-        if (uuid.isNotEmpty()) {
-            add(uuid)
-            add(uuid.replace("-", ""))
-        }
-        val username = account.username.trim()
-        if (username.isNotEmpty()) {
-            add(username)
-            add(username.lowercase())
-        }
-    }.distinct()
+        val cleanUuid = uuid.replace("-", "")
+        return listOf(uuid, cleanUuid, account.id).distinct()
+    }
 
     fun hasSkin(context: Context, account: LauncherAccount): Boolean {
+        if (!isMicrosoftAccount(account)) return false
         return getSkinCandidates(account).any { key ->
             val file = getSkinFile(context, key)
             file.isFile && file.length() > 0
@@ -50,6 +50,7 @@ object AccountSkinManager {
     }
 
     fun saveSkinBitmap(context: Context, account: LauncherAccount, bitmap: Bitmap) {
+        if (!isMicrosoftAccount(account)) return
         val normalized = SkinUtils.normalizeSkin(bitmap)
         val bytes = ByteArrayOutputStream().use { bos ->
             normalized.compress(Bitmap.CompressFormat.PNG, 100, bos)
@@ -90,59 +91,45 @@ object AccountSkinManager {
             .getOrNull()
     }
 
+    /**
+     * Dynamic skin syncing is viable ONLY for Microsoft accounts using the official Minecraft API and UUID.
+     * Offline accounts always use the default Minecraft skin.
+     */
     suspend fun syncAccountSkin(
         context: Context,
         account: LauncherAccount,
         force: Boolean = false,
     ): Bitmap? = withContext(Dispatchers.IO) {
+        if (!isMicrosoftAccount(account)) {
+            return@withContext null
+        }
+
         if (!force && hasSkin(context, account)) {
             return@withContext loadSkin(context, account)
         }
 
+        val uuid = account.uuid?.trim().orEmpty()
+        val cleanUuid = uuid.replace("-", "")
+        if (cleanUuid.length != 32) {
+            Log.w(TAG, "Cannot sync skin: Invalid Minecraft UUID length '${account.uuid}'")
+            return@withContext null
+        }
+
         var downloaded: Bitmap? = null
 
-        // 1. If we have a UUID (Microsoft account or official profile), query Mojang API
-        val uuid = account.uuid?.trim().orEmpty()
-        if (uuid.isNotEmpty()) {
-            val mojangRes = MojangSkinApi.fetchByUuid(uuid)
-            val profile = mojangRes.getOrNull()
-            if (profile?.skinBitmap != null) {
-                downloaded = profile.skinBitmap
-            } else if (!profile?.skinUrl.isNullOrEmpty()) {
-                downloaded = runCatching { SkinUtils.fromUrl(profile!!.skinUrl!!) }.getOrNull()
-            }
+        // 1. Fetch official skin by UUID from Mojang API
+        val mojangRes = MojangSkinApi.fetchByUuid(cleanUuid)
+        val profile = mojangRes.getOrNull()
+        if (profile?.skinBitmap != null) {
+            downloaded = profile.skinBitmap
+        } else if (!profile?.skinUrl.isNullOrEmpty()) {
+            downloaded = runCatching { SkinUtils.fromUrl(profile!!.skinUrl!!) }.getOrNull()
         }
 
-        // 2. Query Mojang API by username if not Steve/Alex
-        val username = account.username.trim()
-        if (downloaded == null && username.isNotEmpty() &&
-            !username.equals("Steve", ignoreCase = true) &&
-            !username.equals("Alex", ignoreCase = true)
-        ) {
-            val mojangRes = MojangSkinApi.fetchByUsername(username)
-            val profile = mojangRes.getOrNull()
-            if (profile?.skinBitmap != null) {
-                downloaded = profile.skinBitmap
-            } else if (!profile?.skinUrl.isNullOrEmpty()) {
-                downloaded = runCatching { SkinUtils.fromUrl(profile!!.skinUrl!!) }.getOrNull()
-            }
-        }
-
-        // 3. Fallback: Crafatar CDN by UUID
-        if (downloaded == null && uuid.isNotEmpty()) {
-            val cleanUuid = uuid.replace("-", "").trim()
+        // 2. Fallback: Crafatar CDN by official UUID (resilient to Mojang session server 429 rate limits)
+        if (downloaded == null) {
             downloaded = runCatching {
                 SkinUtils.fromUrl("https://crafatar.com/skins/$cleanUuid")
-            }.getOrNull()
-        }
-
-        // 4. Fallback: Minotar CDN by username
-        if (downloaded == null && username.isNotEmpty() &&
-            !username.equals("Steve", ignoreCase = true) &&
-            !username.equals("Alex", ignoreCase = true)
-        ) {
-            downloaded = runCatching {
-                SkinUtils.fromUrl("https://minotar.net/skin/$username")
             }.getOrNull()
         }
 
@@ -155,9 +142,14 @@ object AccountSkinManager {
         null
     }
 
+    /**
+     * Loads the skin bitmap for [account].
+     * For Microsoft accounts, returns the dynamically cached official Minecraft skin by UUID.
+     * For offline accounts, returns the bundled default Minecraft skin.
+     */
     fun loadSkin(context: Context, account: LauncherAccount?): Bitmap {
-        if (account != null) {
-            for (key in getSkinCandidates(account)) {
+        if (isMicrosoftAccount(account)) {
+            for (key in getSkinCandidates(account!!)) {
                 val file = getSkinFile(context, key)
                 if (file.isFile && file.length() > 0) {
                     val loaded = runCatching {

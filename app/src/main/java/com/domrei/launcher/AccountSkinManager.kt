@@ -162,8 +162,9 @@ object AccountSkinManager {
                 }
             }
         }
-        return runCatching { SkinUtils.fromAsset(context, DEFAULT_SKIN_ASSET) }
+        val defaultSkin = runCatching { SkinUtils.fromAsset(context, DEFAULT_SKIN_ASSET) }
             .mapCatching { SkinUtils.normalizeSkin(it) }
-            .getOrElse { DefaultSkin.create() }
+            .getOrElse { DefaultSkin.create(slim = false) }
+        return SkinUtils.toClassicModel(defaultSkin)
     }
 }

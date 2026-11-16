@@ -182,6 +182,7 @@ import com.domrei.launcher.ui.theme.hsvToColor
 import com.domrei.launcher.ui.theme.parseHexColorOrNull
 import com.domrei.skinview.DefaultSkin
 import com.domrei.skinview.SkinAnimations
+import com.domrei.skinview.SkinModel
 import com.domrei.skinview.SkinUtils
 import com.domrei.skinview.SkinViewer
 import com.domrei.skinview.SkinViewerConfig
@@ -4584,9 +4585,12 @@ private fun AccountPanelContent(
     // Account ID whose {•••} options menu is currently expanded
     var openOptionsAccountId by remember { mutableStateOf<String?>(null) }
 
+    val isMicrosoft = selectedAccount != null && selectedAccount.typeRes == R.string.account_type_microsoft
+
     // Idle animation, rotatable by dragging, NOT auto-rotating
-    val accountSkinConfig = remember(previewUsername) {
+    val accountSkinConfig = remember(previewUsername, isMicrosoft) {
         SkinViewerConfig(
+            model = if (isMicrosoft) SkinModel.AUTO else SkinModel.CLASSIC,
             animation = SkinAnimations.Idle,
             autoRotate = false,
             dragToRotate = true,
@@ -5014,8 +5018,11 @@ fun RightPlayAndSkinPanel(
     val skin = if (hasAccount) accountSkin else rememberNoAccountSkin()
     val cape: Bitmap? = null
 
-    val skinConfig = remember(activeUsername) {
+    val isMicrosoft = activeAccount != null && activeAccount.typeRes == R.string.account_type_microsoft
+
+    val skinConfig = remember(activeUsername, isMicrosoft) {
         SkinViewerConfig(
+            model = if (isMicrosoft) SkinModel.AUTO else SkinModel.CLASSIC,
             animation = SkinAnimations.CoolDisplay,
             autoRotate = false,
             dragToRotate = false,

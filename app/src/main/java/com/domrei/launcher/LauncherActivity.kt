@@ -4424,6 +4424,8 @@ private fun InstancesPanelContent(
             val lazyListState = rememberLazyListState()
             val haptic = LocalHapticFeedback.current
             val soundPlayer = LocalLauncherSoundPlayer.current
+            // Instance ID whose {•••} options menu is currently expanded
+            var openOptionsInstanceId by remember { mutableStateOf<String?>(null) }
             val reorderState = rememberReorderableState(
                 listState = lazyListState,
                 totalItemsCount = { instances.size },
@@ -4446,6 +4448,7 @@ private fun InstancesPanelContent(
                     val itemModifier = if (isDragging) Modifier else Modifier.animateItem()
 
                     val isSelected = instance.id == selectedInstanceId
+                    val isMenuOpen = openOptionsInstanceId == instance.id
                     val instanceName = instance.name
                     val subtitle = if (instance.loaderType == InstanceLoaderType.FABRIC && !instance.loaderVersion.isNullOrBlank()) {
                         stringResource(R.string.instance_subtitle_fabric, instance.mcVersion, instance.loaderVersion)
@@ -4468,6 +4471,19 @@ private fun InstancesPanelContent(
                         animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
                         label = "panelInstanceTitleColor",
                     )
+                    val moreBtnBg by animateColorAsState(
+                        targetValue = if (isMenuOpen) colors.surfaceCardSelected else colors.transparent,
+                        animationSpec = tween(durationMillis = 180),
+                        label = "instanceMoreBtnBg",
+                    )
+                    val moreBtnRotation by animateFloatAsState(
+                        targetValue = if (isMenuOpen) 90f else 0f,
+                        animationSpec = spring(
+                            dampingRatio = 0.72f,
+                            stiffness = 420f,
+                        ),
+                        label = "instanceMoreBtnRotation",
+                    )
 
                     Box(
                         modifier = itemModifier
@@ -4488,6 +4504,7 @@ private fun InstancesPanelContent(
                                     pressScale = 0.98f,
                                     onClick = {
                                         if (!reorderState.isDragging && !reorderState.justFinishedDrag) {
+                                            openOptionsInstanceId = null
                                             onInstanceSelect(instance)
                                         }
                                     },
@@ -4499,7 +4516,7 @@ private fun InstancesPanelContent(
                                     color = if (isDragging) colors.accent else itemBorder,
                                     shape = itemShape,
                                 )
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                                .padding(start = 12.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween,
                         ) {
@@ -4538,27 +4555,87 @@ private fun InstancesPanelContent(
                                 }
                             }
 
-                            val removeShape = RoundedCornerShape(10.dp)
-                            Box(
-                                modifier = Modifier
-                                    .smoothPressClickable(
-                                        pressScale = 0.92f,
-                                        onClick = { onRemoveInstance(instance) },
-                                    )
-                                    .clip(removeShape)
-                                    .background(colors.errorContainer)
-                                    .border(1.dp, colors.errorBorderStrong, removeShape)
-                                    .padding(horizontal = 10.dp, vertical = 5.dp),
-                                contentAlignment = Alignment.Center,
+                            // Right: More options {•••} (plus smoothly animated inline Remove)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
-                                Text(
-                                    text = stringResource(R.string.action_remove),
-                                    color = colors.errorText,
-                                    style = MaterialTheme.typography.labelMedium.copy(
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.SemiBold,
+                                AnimatedVisibility(
+                                    visible = isMenuOpen,
+                                    enter = fadeIn(
+                                        animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
+                                    ) + expandHorizontally(
+                                        animationSpec = spring(
+                                            dampingRatio = 0.82f,
+                                            stiffness = 440f,
+                                        ),
+                                        expandFrom = Alignment.End,
                                     ),
-                                )
+                                    exit = fadeOut(
+                                        animationSpec = tween(durationMillis = 140, easing = FastOutSlowInEasing),
+                                    ) + shrinkHorizontally(
+                                        animationSpec = tween(durationMillis = 170, easing = FastOutSlowInEasing),
+                                        shrinkTowards = Alignment.End,
+                                    ),
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    ) {
+                                        val actionShape = RoundedCornerShape(10.dp)
+
+                                        // Remove option
+                                        Box(
+                                            modifier = Modifier
+                                                .smoothPressClickable(
+                                                    pressScale = 0.92f,
+                                                    onClick = {
+                                                        openOptionsInstanceId = null
+                                                        onRemoveInstance(instance)
+                                                    },
+                                                )
+                                                .clip(actionShape)
+                                                .background(colors.errorCancelContainer)
+                                                .border(1.dp, colors.errorBorder, actionShape)
+                                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            Text(
+                                                text = stringResource(R.string.action_remove),
+                                                color = colors.errorText,
+                                                style = MaterialTheme.typography.labelMedium.copy(
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                ),
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // {•••} More options button
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .smoothPressClickable(
+                                            pressScale = 0.90f,
+                                            onClick = {
+                                                openOptionsInstanceId =
+                                                    if (isMenuOpen) null else instance.id
+                                            },
+                                        )
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(moreBtnBg),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        painter = painterResource(id = R.drawable.ic_more_horiz),
+                                        contentDescription = stringResource(R.string.action_more_options),
+                                        tint = colors.textSecondary,
+                                        modifier = Modifier
+                                            .size(20.dp)
+                                            .graphicsLayer { rotationZ = moreBtnRotation },
+                                    )
+                                }
                             }
                         }
                     }

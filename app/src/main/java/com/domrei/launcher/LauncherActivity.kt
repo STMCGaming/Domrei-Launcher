@@ -6137,16 +6137,15 @@ private fun DisplayAndRendererSettingsContent(
             ),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        // Clickable header row with "Renderer" on left, selected renderer name and chevron on right
-        Row(
+        // Clickable header Column: "Renderer" on top, current renderer and chevron below
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .smoothPressClickable(
                     pressScale = 0.98f,
                     onClick = { isRendererDropdownOpen = !isRendererDropdownOpen },
                 ),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Text(
                 text = stringResource(R.string.settings_renderer_title),
@@ -6160,16 +6159,20 @@ private fun DisplayAndRendererSettingsContent(
             )
 
             Row(
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(
-                    text = selectedRenderer.displayName,
+                    text = stringResource(R.string.settings_current_renderer_format, selectedRenderer.displayName),
                     color = colors.accent,
                     style = MaterialTheme.typography.bodyMedium.copy(
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,
                     ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
                 )
                 Icon(
                     painter = painterResource(id = R.drawable.ic_chevron_down),

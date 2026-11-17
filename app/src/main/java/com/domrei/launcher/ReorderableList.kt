@@ -1,6 +1,5 @@
 package com.domrei.launcher
 
-import android.os.Build
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -20,8 +19,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.BlurEffect
-import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -305,7 +302,7 @@ suspend fun PointerInputScope.detectHoldAndDrag(
 /**
  * Modifier applied to each item in a reorderable list.
  * Listens for long-press to initiate dragging, tracks pointer motion,
- * translates the active item vertically, and blurs neighboring items like ProgressBar.
+ * and smoothly translates the active item vertically with elevation.
  */
 fun Modifier.reorderableItem(
     state: ReorderableState,
@@ -316,7 +313,6 @@ fun Modifier.reorderableItem(
     soundPlayer: LauncherSoundPlayer? = null,
 ): Modifier = composed {
     val isCurrentItem = state.isItemDragging(index, key)
-    val isOtherItem = state.isReordering && !isCurrentItem
 
     val scale by animateFloatAsState(
         targetValue = if (isCurrentItem) 1.03f else 1f,
@@ -330,14 +326,6 @@ fun Modifier.reorderableItem(
         label = "reorderShadow",
     )
 
-    val otherAlpha by animateFloatAsState(
-        targetValue = if (isOtherItem) 0.65f else 1f,
-        animationSpec = spring(dampingRatio = 0.85f, stiffness = 400f),
-        label = "reorderOtherAlpha",
-    )
-
-    val otherBlurPx = if (isOtherItem && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) 6f else 0f
-
     this
         .zIndex(if (isCurrentItem) 3f else 0f)
         .graphicsLayer {
@@ -345,17 +333,6 @@ fun Modifier.reorderableItem(
             scaleX = scale
             scaleY = scale
             this.shadowElevation = shadowElevation
-            alpha = otherAlpha
-            if (otherBlurPx > 0f) {
-                renderEffect = BlurEffect(
-                    renderEffect = null,
-                    radiusX = otherBlurPx,
-                    radiusY = otherBlurPx,
-                    edgeTreatment = TileMode.Clamp,
-                )
-            } else {
-                renderEffect = null
-            }
         }
         .then(
             if (enabled) {

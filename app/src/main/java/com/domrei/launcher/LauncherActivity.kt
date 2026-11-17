@@ -35,11 +35,13 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.updateTransition
 import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
@@ -94,6 +96,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -167,6 +171,7 @@ import kotlin.math.roundToInt
 import com.domrei.gameengine.DomreiGameEngine
 import com.domrei.gameengine.GameEngineState
 import com.domrei.gameengine.GameLaunchRequest
+import com.domrei.gameengine.renderer.RendererType
 import com.domrei.launcher.minecraft.DownloadFileItem
 import com.domrei.launcher.minecraft.DownloadStageStatus
 import com.domrei.launcher.minecraft.FabricLoaderVersionEntry
@@ -484,7 +489,9 @@ fun LauncherScreen(
     val instanceManager = remember(context) { MinecraftInstanceManager(context) }
     val gameEngine = remember(context) { DomreiGameEngine(context) }
     val engineStatus by gameEngine.status.collectAsState()
-    val selectedRenderer = remember { gameEngine.rendererManager.getSelectedRenderer() }
+    var selectedRenderer by remember { mutableStateOf(gameEngine.rendererManager.getSelectedRenderer()) }
+    val displayPrefs = remember(context) { DisplayPreferences(context) }
+    var resolutionScale by remember { mutableIntStateOf(displayPrefs.loadResolutionScale()) }
     var instances by remember {
         mutableStateOf(preloaded?.instances ?: instanceManager.loadInstances())
     }
@@ -1204,6 +1211,16 @@ fun LauncherScreen(
                 onOpenAccentColorPicker = {
                     activeDialog = LauncherDialog.PickAccentColor(initialColor = accentColor)
                 },
+                selectedRenderer = selectedRenderer,
+                onRendererChange = { newRenderer ->
+                    gameEngine.rendererManager.setSelectedRenderer(newRenderer)
+                    selectedRenderer = newRenderer
+                },
+                resolutionScale = resolutionScale,
+                onResolutionScaleChange = { newScale ->
+                    displayPrefs.saveResolutionScale(newScale)
+                    resolutionScale = newScale
+                },
                 screenWidth = screenWidth,
                 screenHeight = screenHeight,
                 backgroundConfig = currentBackground,
@@ -1276,6 +1293,12 @@ fun LauncherScreen(
                                         isInstanceInstall = false,
                                         customStatusTitle = "PREPARING_RUNTIME: ${targetInstance.name}",
                                     )
+                                    val displayMetrics = context.resources.displayMetrics
+                                    val baseWidth = displayMetrics.widthPixels.coerceAtLeast(1280)
+                                    val baseHeight = displayMetrics.heightPixels.coerceAtLeast(720)
+                                    val scaledWidth = ((baseWidth * resolutionScale) / 100).coerceAtLeast(640)
+                                    val scaledHeight = ((baseHeight * resolutionScale) / 100).coerceAtLeast(360)
+
                                     val request = GameLaunchRequest(
                                         instanceName = targetInstance.name,
                                         minecraftVersion = targetInstance.mcVersion,
@@ -1288,6 +1311,8 @@ fun LauncherScreen(
                                             ?: GameLaunchRequest.generateOfflineUuid(launchUsername),
                                         accessToken = selectedAccount?.accessToken ?: "0",
                                         preferredRenderer = selectedRenderer,
+                                        windowWidth = scaledWidth,
+                                        windowHeight = scaledHeight,
                                     )
                                     val launchResult = gameEngine.launchGame(
                                         request = request,
@@ -4133,6 +4158,10 @@ fun UnifiedLeftRailAndPanel(
     onResetBackground: () -> Unit,
     onAccentColorChange: (Color) -> Unit,
     onOpenAccentColorPicker: () -> Unit,
+    selectedRenderer: RendererType,
+    onRendererChange: (RendererType) -> Unit,
+    resolutionScale: Int,
+    onResolutionScaleChange: (Int) -> Unit,
     screenWidth: Dp,
     screenHeight: Dp,
     backgroundConfig: BackgroundConfig,
@@ -4315,6 +4344,10 @@ fun UnifiedLeftRailAndPanel(
                                     onResetBackground = onResetBackground,
                                     onAccentColorChange = onAccentColorChange,
                                     onOpenAccentColorPicker = onOpenAccentColorPicker,
+                                    selectedRenderer = selectedRenderer,
+                                    onRendererChange = onRendererChange,
+                                    resolutionScale = resolutionScale,
+                                    onResolutionScaleChange = onResolutionScaleChange,
                                 )
                             }
                         }
@@ -5777,6 +5810,10 @@ private fun SettingsPanelContent(
     onResetBackground: () -> Unit,
     onAccentColorChange: (Color) -> Unit,
     onOpenAccentColorPicker: () -> Unit,
+    selectedRenderer: RendererType,
+    onRendererChange: (RendererType) -> Unit,
+    resolutionScale: Int,
+    onResolutionScaleChange: (Int) -> Unit,
 ) {
     val colors = LauncherTheme.colors
     var selectedCategory by remember { mutableStateOf(SettingsCategory.DISPLAY_AND_RENDERER) }
@@ -5896,7 +5933,22 @@ private fun SettingsPanelContent(
 
         // Category content area
         when (selectedCategory) {
-            SettingsCategory.DISPLAY_AND_RENDERER,
+            SettingsCategory.DISPLAY_AND_RENDERER -> {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    DisplayAndRendererSettingsContent(
+                        selectedRenderer = selectedRenderer,
+                        onRendererChange = onRendererChange,
+                        resolutionScale = resolutionScale,
+                        onResolutionScaleChange = onResolutionScaleChange,
+                    )
+                }
+            }
             SettingsCategory.JAVA_TWEAK,
             SettingsCategory.CONTROLS -> Box(
                 modifier = Modifier
@@ -6056,6 +6108,337 @@ private fun AppearanceSelectorResetRow(
             selected = false,
             enabled = resetEnabled,
             onClick = onResetClick,
+        )
+    }
+}
+
+@Composable
+private fun DisplayAndRendererSettingsContent(
+    selectedRenderer: RendererType,
+    onRendererChange: (RendererType) -> Unit,
+    resolutionScale: Int,
+    onResolutionScaleChange: (Int) -> Unit,
+) {
+    val colors = LauncherTheme.colors
+    var isRendererDropdownOpen by remember { mutableStateOf(false) }
+
+    // 1. Renderer Selection Card with option dropdown and animated resize
+    AppearanceSettingsCard(
+        title = stringResource(R.string.settings_renderer_title),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        val dropdownShape = RoundedCornerShape(12.dp)
+        val chevronRotation by animateFloatAsState(
+            targetValue = if (isRendererDropdownOpen) 180f else 0f,
+            animationSpec = spring(
+                dampingRatio = 0.72f,
+                stiffness = 420f,
+            ),
+            label = "rendererChevronRotation",
+        )
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(dropdownShape)
+                .background(colors.surfaceButton)
+                .border(
+                    width = 1.dp,
+                    color = if (isRendererDropdownOpen) colors.borderSelectedCard else colors.borderButton,
+                    shape = dropdownShape,
+                )
+                .animateContentSize(
+                    animationSpec = spring(
+                        dampingRatio = 0.82f,
+                        stiffness = 420f,
+                    ),
+                ),
+        ) {
+            // Trigger Row: Displays currently selected renderer & toggle chevron
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .smoothPressClickable(
+                        pressScale = 0.98f,
+                        onClick = { isRendererDropdownOpen = !isRendererDropdownOpen },
+                    )
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_display_renderer),
+                        contentDescription = null,
+                        tint = colors.accent,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(
+                                text = selectedRenderer.displayName,
+                                color = colors.textPrimary,
+                                style = MaterialTheme.typography.bodyLarge.copy(
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            // Active badge
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(colors.accentContainer)
+                                    .border(1.dp, colors.accentBorder, RoundedCornerShape(6.dp))
+                                    .padding(horizontal = 7.dp, vertical = 2.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.renderer_badge_active),
+                                    color = colors.accent,
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                    ),
+                                )
+                            }
+                        }
+                        Text(
+                            text = "${selectedRenderer.glVersionLabel} • ${selectedRenderer.glslVersionLabel}",
+                            color = colors.textMuted,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Normal,
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_chevron_down),
+                    contentDescription = stringResource(R.string.action_more_options),
+                    tint = colors.textSecondary,
+                    modifier = Modifier
+                        .size(20.dp)
+                        .graphicsLayer { rotationZ = chevronRotation },
+                )
+            }
+
+            // Dropdown Menu Body: Renderer options list with animated expansion
+            AnimatedVisibility(
+                visible = isRendererDropdownOpen,
+                enter = fadeIn(tween(180, easing = FastOutSlowInEasing)) + expandVertically(
+                    animationSpec = spring(dampingRatio = 0.82f, stiffness = 420f),
+                ),
+                exit = fadeOut(tween(140, easing = FastOutSlowInEasing)) + shrinkVertically(
+                    animationSpec = tween(180, easing = FastOutSlowInEasing),
+                ),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 8.dp, end = 8.dp, bottom = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .background(colors.borderSubtle),
+                    )
+
+                    Spacer(modifier = Modifier.height(2.dp))
+
+                    RendererType.entries.forEach { renderer ->
+                        val isSelected = renderer == selectedRenderer
+                        val optionShape = RoundedCornerShape(10.dp)
+                        val optionBg by animateColorAsState(
+                            targetValue = if (isSelected) colors.surfaceCardSelected else colors.surfaceCard,
+                            animationSpec = tween(durationMillis = 180),
+                            label = "rendererOptionBg_${renderer.id}",
+                        )
+                        val optionBorder by animateColorAsState(
+                            targetValue = if (isSelected) colors.borderSelectedCard else colors.borderSubtle,
+                            animationSpec = tween(durationMillis = 180),
+                            label = "rendererOptionBorder_${renderer.id}",
+                        )
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .smoothPressClickable(
+                                    pressScale = 0.98f,
+                                    onClick = {
+                                        onRendererChange(renderer)
+                                        isRendererDropdownOpen = false
+                                    },
+                                )
+                                .clip(optionShape)
+                                .background(optionBg)
+                                .border(1.dp, optionBorder, optionShape)
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(3.dp),
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Text(
+                                        text = renderer.displayName,
+                                        color = if (isSelected) colors.accent else colors.textPrimary,
+                                        style = MaterialTheme.typography.bodyLarge.copy(
+                                            fontSize = 13.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                        ),
+                                    )
+                                    if (isSelected) {
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .background(colors.accentContainer)
+                                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                                        ) {
+                                            Text(
+                                                text = stringResource(R.string.renderer_badge_active),
+                                                color = colors.accent,
+                                                style = MaterialTheme.typography.labelSmall.copy(
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                ),
+                                            )
+                                        }
+                                    }
+                                }
+                                Text(
+                                    text = renderer.subtitle,
+                                    color = colors.textMuted,
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontSize = 11.sp,
+                                        lineHeight = 15.sp,
+                                    ),
+                                )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(colors.white.copy(alpha = 0.08f))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                                    ) {
+                                        Text(
+                                            text = renderer.glVersionLabel,
+                                            color = colors.white.copy(alpha = 0.70f),
+                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                        )
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(colors.white.copy(alpha = 0.08f))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                                    ) {
+                                        Text(
+                                            text = renderer.glslVersionLabel,
+                                            color = colors.white.copy(alpha = 0.70f),
+                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Display Resolution Scaling (Resize) Card
+    AppearanceSettingsCard(
+        title = stringResource(R.string.settings_res_scale_title),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        val scaleSubtitle = when (resolutionScale) {
+            100 -> "100% • Native (Full Resolution)"
+            85 -> "85% • High Quality"
+            75 -> "75% • Balanced Performance"
+            50 -> "50% • Performance Mode"
+            else -> "$resolutionScale% Resolution Scale"
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = scaleSubtitle,
+                    color = colors.textPrimary,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                )
+                Text(
+                    text = "Adjusts game render surface size to boost FPS",
+                    color = colors.textMuted,
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                )
+            }
+
+            AppearanceOptionButton(
+                label = stringResource(R.string.action_reset),
+                selected = false,
+                enabled = resolutionScale != 100,
+                onClick = { onResolutionScaleChange(100) },
+            )
+        }
+
+        // Quick Preset Buttons Row
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            listOf(100, 85, 75, 50).forEach { preset ->
+                AppearanceOptionButton(
+                    label = "$preset%",
+                    selected = resolutionScale == preset,
+                    onClick = { onResolutionScaleChange(preset) },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+
+        // Slider for fine resolution resize
+        Slider(
+            value = resolutionScale.toFloat(),
+            onValueChange = { onResolutionScaleChange(it.toInt().coerceIn(25, 100)) },
+            valueRange = 25f..100f,
+            steps = 14,
+            colors = SliderDefaults.colors(
+                thumbColor = colors.accent,
+                activeTrackColor = colors.accent,
+                inactiveTrackColor = colors.surfaceButton,
+            ),
+            modifier = Modifier.fillMaxWidth(),
         )
     }
 }

@@ -6302,12 +6302,11 @@ private fun DisplayAndRendererSettingsContent(
             )
         }
 
-        // Slider for fine resolution resize
+        // Slider for fine resolution resize: continuous 0-100% without steps
         Slider(
             value = resolutionScale.toFloat(),
-            onValueChange = { onResolutionScaleChange(it.toInt().coerceIn(25, 100)) },
-            valueRange = 25f..100f,
-            steps = 14,
+            onValueChange = { onResolutionScaleChange(it.roundToInt().coerceIn(0, 100)) },
+            valueRange = 0f..100f,
             colors = SliderDefaults.colors(
                 thumbColor = colors.accent,
                 activeTrackColor = colors.accent,

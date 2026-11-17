@@ -5828,7 +5828,8 @@ private fun SettingsPanelContent(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 4.dp, vertical = 2.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -5850,23 +5851,11 @@ private fun SettingsPanelContent(
                     animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
                     label = "settingsCategoryContent",
                 )
-                val selectedScale by animateFloatAsState(
-                    targetValue = if (isSelected) 1.04f else 1.0f,
-                    animationSpec = spring(
-                        dampingRatio = 0.72f,
-                        stiffness = 380f,
-                    ),
-                    label = "settingsCategorySelectedScale",
-                )
 
                 Box(
                     modifier = Modifier
-                        .graphicsLayer {
-                            scaleX = selectedScale
-                            scaleY = selectedScale
-                        }
                         .smoothPressClickable(
-                            pressScale = 0.92f,
+                            pressScale = 0.96f,
                             onClick = { selectedCategory = category },
                         )
                         .clip(tabShape)

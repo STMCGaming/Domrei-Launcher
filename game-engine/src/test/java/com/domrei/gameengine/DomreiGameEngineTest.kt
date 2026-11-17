@@ -274,6 +274,8 @@ class DomreiGameEngineTest {
             assertEquals(spec.mainClass, roundTrip.mainClass)
             assertEquals(spec.commandLine, roundTrip.commandLine)
             assertEquals(spec.environment, roundTrip.environment)
+            assertEquals(spec.windowWidth, roundTrip.windowWidth)
+            assertEquals(spec.windowHeight, roundTrip.windowHeight)
 
             DomreiJliRunner.enforceReadOnlyExecutablePermissions(fakeMgSo.parentFile!!)
             assertFalse(fakeMgSo.canWrite())

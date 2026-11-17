@@ -146,6 +146,8 @@ class DomreiJvmService : Service() {
                 put("jvmArguments", JSONArray(spec.jvmArguments))
                 put("gameArguments", JSONArray(spec.gameArguments))
                 put("environment", JSONObject(spec.environment))
+                put("windowWidth", spec.windowWidth)
+                put("windowHeight", spec.windowHeight)
             }
         }
 
@@ -206,7 +208,9 @@ class DomreiJvmService : Service() {
                 classpathEntries = cpEntries,
                 jvmArguments = jvmArgs,
                 gameArguments = gameArgs,
-                environment = env
+                environment = env,
+                windowWidth = json.optInt("windowWidth", 1920),
+                windowHeight = json.optInt("windowHeight", 1080)
             )
         }
     }

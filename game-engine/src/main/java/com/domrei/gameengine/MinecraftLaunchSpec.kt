@@ -56,7 +56,9 @@ data class MinecraftLaunchSpec(
     val classpathEntries: List<File>,
     val jvmArguments: List<String>,
     val gameArguments: List<String>,
-    val environment: Map<String, String>
+    val environment: Map<String, String>,
+    val windowWidth: Int = 1920,
+    val windowHeight: Int = 1080
 ) {
     val classpathString: String
         get() = classpathEntries.joinToString(File.pathSeparator) { it.absolutePath }

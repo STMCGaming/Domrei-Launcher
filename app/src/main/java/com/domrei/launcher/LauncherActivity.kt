@@ -1297,10 +1297,12 @@ fun LauncherScreen(
                                         customStatusTitle = "PREPARING_RUNTIME: ${targetInstance.name}",
                                     )
                                     val displayMetrics = context.resources.displayMetrics
-                                    val baseWidth = displayMetrics.widthPixels.coerceAtLeast(1280)
-                                    val baseHeight = displayMetrics.heightPixels.coerceAtLeast(720)
-                                    val scaledWidth = ((baseWidth * resolutionScale) / 100).coerceAtLeast(640)
-                                    val scaledHeight = ((baseHeight * resolutionScale) / 100).coerceAtLeast(360)
+                                    val maxDim = maxOf(displayMetrics.widthPixels, displayMetrics.heightPixels).coerceAtLeast(1280)
+                                    val minDim = minOf(displayMetrics.widthPixels, displayMetrics.heightPixels).coerceAtLeast(720)
+                                    val baseWidth = maxDim
+                                    val baseHeight = minDim
+                                    val scaledWidth = ((baseWidth * resolutionScale) / 100).coerceAtLeast(320)
+                                    val scaledHeight = ((baseHeight * resolutionScale) / 100).coerceAtLeast(180)
 
                                     val request = GameLaunchRequest(
                                         instanceName = targetInstance.name,
@@ -6302,11 +6304,11 @@ private fun DisplayAndRendererSettingsContent(
             )
         }
 
-        // Slider for fine resolution resize: continuous 0-100% without steps
+        // Slider for fine resolution resize: continuous 25-100% without steps
         Slider(
             value = resolutionScale.toFloat(),
-            onValueChange = { onResolutionScaleChange(it.roundToInt().coerceIn(0, 100)) },
-            valueRange = 0f..100f,
+            onValueChange = { onResolutionScaleChange(it.roundToInt().coerceIn(25, 100)) },
+            valueRange = 25f..100f,
             colors = SliderDefaults.colors(
                 thumbColor = colors.accent,
                 activeTrackColor = colors.accent,

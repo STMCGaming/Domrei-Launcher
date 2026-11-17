@@ -15,12 +15,12 @@ class DisplayPreferences(context: Context) {
     fun loadResolutionScale(): Int {
         return runCatching {
             prefs.getInt(KEY_RES_SCALE, DEFAULT_RES_SCALE)
-        }.getOrDefault(DEFAULT_RES_SCALE).coerceIn(0, 100)
+        }.getOrDefault(DEFAULT_RES_SCALE).coerceIn(25, 100)
     }
 
     fun saveResolutionScale(scale: Int) {
         prefs.edit()
-            .putInt(KEY_RES_SCALE, scale.coerceIn(0, 100))
+            .putInt(KEY_RES_SCALE, scale.coerceIn(25, 100))
             .apply()
     }
 

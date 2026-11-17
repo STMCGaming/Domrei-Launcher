@@ -73,6 +73,10 @@ class GameActivity : Activity(), SurfaceHolder.Callback {
     private var virtualLookX = 960f
     private var virtualLookY = 540f
     private var sneakToggled = false
+    private var targetResolutionWidth: Int = 0
+    private var targetResolutionHeight: Int = 0
+    private var currentSurfaceWidth: Int = 0
+    private var currentSurfaceHeight: Int = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -89,12 +93,22 @@ class GameActivity : Activity(), SurfaceHolder.Callback {
         logFile = File(logPath)
         initInputBridgeBuffer()
 
+        // Read launch spec early to obtain configured resolution scaling dimensions
+        val earlySpec = runCatching {
+            DomreiJvmService.deserializeLaunchSpec(JSONObject(specFile!!.readText()))
+        }.getOrNull()
+        targetResolutionWidth = earlySpec?.windowWidth ?: 0
+        targetResolutionHeight = earlySpec?.windowHeight ?: 0
+
         val rootLayout = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
         }
 
         // 1. Fullscreen SurfaceView for Minecraft OpenGL/EGL rendering + touch-to-mouse forwarding
         surfaceView = SurfaceView(this).apply {
+            if (targetResolutionWidth > 0 && targetResolutionHeight > 0) {
+                holder.setFixedSize(targetResolutionWidth, targetResolutionHeight)
+            }
             holder.addCallback(this@GameActivity)
             isFocusable = true
             isFocusableInTouchMode = true
@@ -369,16 +383,30 @@ class GameActivity : Activity(), SurfaceHolder.Callback {
 
         if (!jvmStarted) {
             jvmStarted = true
-            val surfaceW = surfaceView.width.takeIf { it > 0 } ?: 1920
-            val surfaceH = surfaceView.height.takeIf { it > 0 } ?: 1080
+            val surfaceW = when {
+                currentSurfaceWidth > 0 -> currentSurfaceWidth
+                targetResolutionWidth > 0 -> targetResolutionWidth
+                surfaceView.width > 0 -> surfaceView.width
+                else -> 1920
+            }
+            val surfaceH = when {
+                currentSurfaceHeight > 0 -> currentSurfaceHeight
+                targetResolutionHeight > 0 -> targetResolutionHeight
+                surfaceView.height > 0 -> surfaceView.height
+                else -> 1080
+            }
             startMinecraftJvmThread(winPtr, surfaceW, surfaceH)
         }
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         if (width > 0 && height > 0) {
+            currentSurfaceWidth = width
+            currentSurfaceHeight = height
             System.setProperty("glfwstub.windowWidth", width.toString())
             System.setProperty("glfwstub.windowHeight", height.toString())
+            System.setProperty("domrei.window.width", width.toString())
+            System.setProperty("domrei.window.height", height.toString())
         }
     }
 
@@ -756,27 +784,44 @@ class GameActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun handleSurfaceTouchEvent(event: MotionEvent) {
-        val x = event.x
-        val y = event.y
+        val rawX = event.x
+        val rawY = event.y
         if (isCursorGrabbed()) {
             // In-game 3D camera look mode: relative delta rotation without cursor jumping
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    lastTouchX = x
-                    lastTouchY = y
+                    lastTouchX = rawX
+                    lastTouchY = rawY
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    val dx = (x - lastTouchX) * 1.35f
-                    val dy = (y - lastTouchY) * 1.35f
-                    lastTouchX = x
-                    lastTouchY = y
+                    val dx = (rawX - lastTouchX) * 1.35f
+                    val dy = (rawY - lastTouchY) * 1.35f
+                    lastTouchX = rawX
+                    lastTouchY = rawY
                     virtualLookX += dx
                     virtualLookY += dy
                     writeInputEvent(type = 1, p1 = 0, p2 = 0, p3 = 0, f1 = virtualLookX, f2 = virtualLookY)
                 }
             }
         } else {
-            // GUI / Menu cursor mode: 1:1 absolute touch-to-mouse click
+            // GUI / Menu cursor mode: scale screen touch coordinates to match internal surface resolution
+            val viewW = surfaceView.width.takeIf { it > 0 } ?: 1
+            val viewH = surfaceView.height.takeIf { it > 0 } ?: 1
+            val targetW = when {
+                currentSurfaceWidth > 0 -> currentSurfaceWidth
+                targetResolutionWidth > 0 -> targetResolutionWidth
+                else -> viewW
+            }
+            val targetH = when {
+                currentSurfaceHeight > 0 -> currentSurfaceHeight
+                targetResolutionHeight > 0 -> targetResolutionHeight
+                else -> viewH
+            }
+            val scaleX = targetW.toFloat() / viewW.toFloat()
+            val scaleY = targetH.toFloat() / viewH.toFloat()
+            val x = rawX * scaleX
+            val y = rawY * scaleY
+
             virtualLookX = x
             virtualLookY = y
             when (event.actionMasked) {

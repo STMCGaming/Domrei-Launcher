@@ -319,6 +319,8 @@ class DomreiGameEngine(
         jvmArgs += "-Dorg.lwjgl.system.allocator=system"
         jvmArgs += "-Dglfwstub.windowWidth=${request.windowWidth}"
         jvmArgs += "-Dglfwstub.windowHeight=${request.windowHeight}"
+        jvmArgs += "-Ddomrei.window.width=${request.windowWidth}"
+        jvmArgs += "-Ddomrei.window.height=${request.windowHeight}"
         jvmArgs += "-Dglfwstub.initEgl=false"
         jvmArgs += "-Djna.tmpdir=${tmpDir.absolutePath}"
         jvmArgs += "-Dio.netty.native.workdir=${tmpDir.absolutePath}"
@@ -393,6 +395,8 @@ class DomreiGameEngine(
         environment["TMPDIR"] = tmpDir.absolutePath
         environment["LD_LIBRARY_PATH"] = combinedLibPath
         environment["PATH"] = "${File(runtime.execHomeDir, "bin").absolutePath}:${System.getenv("PATH") ?: "/system/bin"}"
+        environment["DOMREI_WINDOW_WIDTH"] = request.windowWidth.toString()
+        environment["DOMREI_WINDOW_HEIGHT"] = request.windowHeight.toString()
         environment.putAll(renderer.environmentVars)
 
         return MinecraftLaunchSpec(
@@ -409,7 +413,9 @@ class DomreiGameEngine(
             classpathEntries = classpathEntries,
             jvmArguments = jvmArgs,
             gameArguments = gameArgs,
-            environment = environment
+            environment = environment,
+            windowWidth = request.windowWidth,
+            windowHeight = request.windowHeight
         )
     }
 

@@ -668,6 +668,16 @@ fun LauncherScreen(
         label = "dialogBlurRadius",
     )
 
+    // Smoothly blur launcher background behind active Instance/Account panels
+    val backgroundBlurRadius by animateDpAsState(
+        targetValue = if (currentDestination != null) 16.dp else 0.dp,
+        animationSpec = spring(
+            dampingRatio = 0.85f,
+            stiffness = 380f,
+        ),
+        label = "backgroundBlurRadius",
+    )
+
     // Shared animation clock so the real-time Gaussian-blurred rail backdrop matches the live background.
     // Freeze it while a dialog is open: everything behind the dialog is blurred anyway, so this avoids
     // redrawing the background + re-recording the blurred backdrop every frame during dialog animation.
@@ -1123,14 +1133,32 @@ fun LauncherScreen(
                             }
                         },
                 ) {
-                    LauncherBackground(
-                        modifier = Modifier.fillMaxSize(),
-                        config = currentBackground,
-                        sharedTimeSeconds = sharedTimeSeconds,
-                        onMediaFrameRendered = {
-                            backgroundFrameTick = (backgroundFrameTick + 1) and 0x7FFF_FFFF
-                        },
-                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                if (backgroundBlurRadius > 0.5.dp && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                    val rPx = backgroundBlurRadius.toPx()
+                                    renderEffect = BlurEffect(
+                                        renderEffect = null,
+                                        radiusX = rPx,
+                                        radiusY = rPx,
+                                        edgeTreatment = TileMode.Clamp,
+                                    )
+                                } else {
+                                    renderEffect = null
+                                }
+                            },
+                    ) {
+                        LauncherBackground(
+                            modifier = Modifier.fillMaxSize(),
+                            config = currentBackground,
+                            sharedTimeSeconds = sharedTimeSeconds,
+                            onMediaFrameRendered = {
+                                backgroundFrameTick = (backgroundFrameTick + 1) and 0x7FFF_FFFF
+                            },
+                        )
+                    }
                 }
 
                 // Tap-outside scrim to close the Change panel when open
@@ -4369,8 +4397,26 @@ private fun InstancesPanelContent(
                     onClick = onAddInstanceClick,
                 )
                 .clip(addBtnShape)
-                .background(colors.surfaceButton)
-                .border(1.dp, colors.borderButtonStrong, addBtnShape)
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            colors.progressBackdropTop.copy(alpha = 0.55f),
+                            colors.progressBackdropMid.copy(alpha = 0.42f),
+                            colors.progressBackdropBottom.copy(alpha = 0.58f),
+                        ),
+                    ),
+                )
+                .border(
+                    width = 1.dp,
+                    brush = Brush.verticalGradient(
+                        listOf(
+                            colors.borderHighlightTop.copy(alpha = 0.42f),
+                            colors.borderHighlightMid.copy(alpha = 0.20f),
+                            colors.borderHighlightBottom.copy(alpha = 0.32f),
+                        ),
+                    ),
+                    shape = addBtnShape,
+                )
                 .padding(horizontal = 16.dp, vertical = 11.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Start,
@@ -4442,7 +4488,7 @@ private fun InstancesPanelContent(
                     key = { index -> instances[index].id },
                 ) { index ->
                     val instance = instances[index]
-                    val isDragging = reorderState.draggedIndex == index
+                    val isDragging = reorderState.isItemDragging(index, instance.id)
                     val itemModifier = if (isDragging) Modifier else Modifier.animateItem()
 
                     val isSelected = instance.id == selectedInstanceId
@@ -4453,16 +4499,50 @@ private fun InstancesPanelContent(
                         stringResource(R.string.instance_subtitle_vanilla, instance.mcVersion)
                     }
                     val itemShape = RoundedCornerShape(14.dp)
-                    val itemBg by animateColorAsState(
-                        targetValue = if (isSelected) colors.surfaceCardSelected else colors.surfaceCard,
-                        animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
-                        label = "panelInstanceItemBg",
-                    )
-                    val itemBorder by animateColorAsState(
-                        targetValue = if (isSelected) colors.borderSelectedCard else colors.borderSubtle,
-                        animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
-                        label = "panelInstanceItemBorder",
-                    )
+                    val cardBgBrush = when {
+                        isDragging -> Brush.verticalGradient(
+                            listOf(
+                                colors.accent.copy(alpha = 0.32f),
+                                colors.progressBackdropMid.copy(alpha = 0.60f),
+                                colors.progressBackdropBottom.copy(alpha = 0.70f),
+                            ),
+                        )
+                        isSelected -> Brush.verticalGradient(
+                            listOf(
+                                colors.accent.copy(alpha = 0.22f),
+                                colors.progressBackdropMid.copy(alpha = 0.48f),
+                                colors.progressBackdropBottom.copy(alpha = 0.58f),
+                            ),
+                        )
+                        else -> Brush.verticalGradient(
+                            listOf(
+                                colors.progressBackdropTop.copy(alpha = 0.50f),
+                                colors.progressBackdropMid.copy(alpha = 0.38f),
+                                colors.progressBackdropBottom.copy(alpha = 0.52f),
+                            ),
+                        )
+                    }
+                    val cardBorderBrush = when {
+                        isDragging -> Brush.verticalGradient(
+                            listOf(
+                                colors.accent,
+                                colors.accent.copy(alpha = 0.60f),
+                            ),
+                        )
+                        isSelected -> Brush.verticalGradient(
+                            listOf(
+                                colors.accent.copy(alpha = 0.85f),
+                                colors.accent.copy(alpha = 0.45f),
+                            ),
+                        )
+                        else -> Brush.verticalGradient(
+                            listOf(
+                                colors.borderHighlightTop.copy(alpha = 0.38f),
+                                colors.borderHighlightMid.copy(alpha = 0.18f),
+                                colors.borderHighlightBottom.copy(alpha = 0.28f),
+                            ),
+                        )
+                    }
                     val titleColor by animateColorAsState(
                         targetValue = if (isSelected) colors.accent else colors.textPrimary,
                         animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
@@ -4493,10 +4573,10 @@ private fun InstancesPanelContent(
                                     },
                                 )
                                 .clip(itemShape)
-                                .background(if (isDragging) colors.surfaceCardSelected else itemBg)
+                                .background(cardBgBrush)
                                 .border(
-                                    width = if (isDragging) 1.5.dp else 1.dp,
-                                    color = if (isDragging) colors.accent else itemBorder,
+                                    width = if (isDragging || isSelected) 1.5.dp else 1.dp,
+                                    brush = cardBorderBrush,
                                     shape = itemShape,
                                 )
                                 .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -4706,8 +4786,26 @@ private fun AccountPanelContent(
                             },
                         )
                         .clip(addBtnShape)
-                        .background(colors.surfaceButton)
-                        .border(1.dp, colors.borderButtonStrong, addBtnShape)
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    colors.progressBackdropTop.copy(alpha = 0.55f),
+                                    colors.progressBackdropMid.copy(alpha = 0.42f),
+                                    colors.progressBackdropBottom.copy(alpha = 0.58f),
+                                ),
+                            ),
+                        )
+                        .border(
+                            width = 1.dp,
+                            brush = Brush.verticalGradient(
+                                listOf(
+                                    colors.borderHighlightTop.copy(alpha = 0.42f),
+                                    colors.borderHighlightMid.copy(alpha = 0.20f),
+                                    colors.borderHighlightBottom.copy(alpha = 0.32f),
+                                ),
+                            ),
+                            shape = addBtnShape,
+                        )
                         .padding(horizontal = 16.dp, vertical = 11.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.Start,
@@ -4754,22 +4852,56 @@ private fun AccountPanelContent(
                         key = { index -> accounts[index].id },
                     ) { index ->
                         val account = accounts[index]
-                        val isDragging = reorderState.draggedIndex == index
+                        val isDragging = reorderState.isItemDragging(index, account.id)
                         val itemModifier = if (isDragging) Modifier else Modifier.animateItem()
 
                         val isSelected = account.id == selectedAccount?.id
                         val isMenuOpen = openOptionsAccountId == account.id
                         val itemShape = RoundedCornerShape(14.dp)
-                        val itemBg by animateColorAsState(
-                            targetValue = if (isSelected) colors.surfaceCardSelected else colors.surfaceCard,
-                            animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
-                            label = "accountItemBg",
-                        )
-                        val itemBorder by animateColorAsState(
-                            targetValue = if (isSelected) colors.borderSelectedCard else colors.borderSubtle,
-                            animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
-                            label = "accountItemBorder",
-                        )
+                        val cardBgBrush = when {
+                            isDragging -> Brush.verticalGradient(
+                                listOf(
+                                    colors.accent.copy(alpha = 0.32f),
+                                    colors.progressBackdropMid.copy(alpha = 0.60f),
+                                    colors.progressBackdropBottom.copy(alpha = 0.70f),
+                                ),
+                            )
+                            isSelected -> Brush.verticalGradient(
+                                listOf(
+                                    colors.accent.copy(alpha = 0.22f),
+                                    colors.progressBackdropMid.copy(alpha = 0.48f),
+                                    colors.progressBackdropBottom.copy(alpha = 0.58f),
+                                ),
+                            )
+                            else -> Brush.verticalGradient(
+                                listOf(
+                                    colors.progressBackdropTop.copy(alpha = 0.50f),
+                                    colors.progressBackdropMid.copy(alpha = 0.38f),
+                                    colors.progressBackdropBottom.copy(alpha = 0.52f),
+                                ),
+                            )
+                        }
+                        val cardBorderBrush = when {
+                            isDragging -> Brush.verticalGradient(
+                                listOf(
+                                    colors.accent,
+                                    colors.accent.copy(alpha = 0.60f),
+                                ),
+                            )
+                            isSelected -> Brush.verticalGradient(
+                                listOf(
+                                    colors.accent.copy(alpha = 0.85f),
+                                    colors.accent.copy(alpha = 0.45f),
+                                ),
+                            )
+                            else -> Brush.verticalGradient(
+                                listOf(
+                                    colors.borderHighlightTop.copy(alpha = 0.38f),
+                                    colors.borderHighlightMid.copy(alpha = 0.18f),
+                                    colors.borderHighlightBottom.copy(alpha = 0.28f),
+                                ),
+                            )
+                        }
                         val titleColor by animateColorAsState(
                             targetValue = if (isSelected) colors.accent else colors.textPrimary,
                             animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
@@ -4818,10 +4950,10 @@ private fun AccountPanelContent(
                                             },
                                         )
                                         .clip(itemShape)
-                                        .background(if (isDragging) colors.surfaceCardSelected else itemBg)
+                                        .background(cardBgBrush)
                                         .border(
-                                            width = if (isDragging) 1.5.dp else 1.dp,
-                                            color = if (isDragging) colors.accent else itemBorder,
+                                            width = if (isDragging || isSelected) 1.5.dp else 1.dp,
+                                            brush = cardBorderBrush,
                                             shape = itemShape,
                                         )
                                         .padding(start = 12.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
@@ -5046,7 +5178,26 @@ private fun AccountPanelContent(
                         .weight(1f)
                         .fillMaxWidth()
                         .clip(skinBoxShape)
-                        .background(colors.surfaceCard),
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    colors.progressBackdropTop.copy(alpha = 0.50f),
+                                    colors.progressBackdropMid.copy(alpha = 0.40f),
+                                    colors.progressBackdropBottom.copy(alpha = 0.52f),
+                                ),
+                            ),
+                        )
+                        .border(
+                            width = 1.dp,
+                            brush = Brush.verticalGradient(
+                                listOf(
+                                    colors.borderHighlightTop.copy(alpha = 0.38f),
+                                    colors.borderHighlightMid.copy(alpha = 0.18f),
+                                    colors.borderHighlightBottom.copy(alpha = 0.28f),
+                                ),
+                            ),
+                            shape = skinBoxShape,
+                        ),
                     contentAlignment = Alignment.Center,
                 ) {
                     SkinViewer(
@@ -5269,8 +5420,26 @@ fun RightPlayAndSkinPanel(
                                     onClick = onAddInstanceClick,
                                 )
                                 .clip(addShape)
-                                .background(colors.surfaceBadge)
-                                .border(1.dp, colors.borderHighlightTop, addShape)
+                                .background(
+                                    Brush.verticalGradient(
+                                        listOf(
+                                            colors.progressBackdropTop.copy(alpha = 0.55f),
+                                            colors.progressBackdropMid.copy(alpha = 0.42f),
+                                            colors.progressBackdropBottom.copy(alpha = 0.58f),
+                                        ),
+                                    ),
+                                )
+                                .border(
+                                    width = 1.dp,
+                                    brush = Brush.verticalGradient(
+                                        listOf(
+                                            colors.borderHighlightTop.copy(alpha = 0.42f),
+                                            colors.borderHighlightMid.copy(alpha = 0.20f),
+                                            colors.borderHighlightBottom.copy(alpha = 0.32f),
+                                        ),
+                                    ),
+                                    shape = addShape,
+                                )
                                 .padding(horizontal = 14.dp, vertical = 9.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -5313,7 +5482,7 @@ fun RightPlayAndSkinPanel(
                             key = { index -> instances[index].id },
                         ) { index ->
                             val instance = instances[index]
-                            val isDragging = reorderState.draggedIndex == index
+                            val isDragging = reorderState.isItemDragging(index, instance.id)
                             val itemModifier = if (isDragging) Modifier else Modifier.animateItem()
 
                             val isSelected = instance.id == selectedInstanceId
@@ -5327,16 +5496,50 @@ fun RightPlayAndSkinPanel(
                                 stringResource(R.string.instance_subtitle_vanilla, instance.mcVersion)
                             }
                             val itemShape = RoundedCornerShape(14.dp)
-                            val itemBg by animateColorAsState(
-                                targetValue = if (isSelected) colors.surfaceCardSelected else colors.surfaceCard,
-                                animationSpec = tween(durationMillis = 200),
-                                label = "instanceItemBg",
-                            )
-                            val itemBorder by animateColorAsState(
-                                targetValue = if (isSelected) colors.borderSelectedCard else colors.borderSubtle,
-                                animationSpec = tween(durationMillis = 200),
-                                label = "instanceItemBorder",
-                            )
+                            val cardBgBrush = when {
+                                isDragging -> Brush.verticalGradient(
+                                    listOf(
+                                        colors.accent.copy(alpha = 0.32f),
+                                        colors.progressBackdropMid.copy(alpha = 0.60f),
+                                        colors.progressBackdropBottom.copy(alpha = 0.70f),
+                                    ),
+                                )
+                                isSelected -> Brush.verticalGradient(
+                                    listOf(
+                                        colors.accent.copy(alpha = 0.22f),
+                                        colors.progressBackdropMid.copy(alpha = 0.48f),
+                                        colors.progressBackdropBottom.copy(alpha = 0.58f),
+                                    ),
+                                )
+                                else -> Brush.verticalGradient(
+                                    listOf(
+                                        colors.progressBackdropTop.copy(alpha = 0.50f),
+                                        colors.progressBackdropMid.copy(alpha = 0.38f),
+                                        colors.progressBackdropBottom.copy(alpha = 0.52f),
+                                    ),
+                                )
+                            }
+                            val cardBorderBrush = when {
+                                isDragging -> Brush.verticalGradient(
+                                    listOf(
+                                        colors.accent,
+                                        colors.accent.copy(alpha = 0.60f),
+                                    ),
+                                )
+                                isSelected -> Brush.verticalGradient(
+                                    listOf(
+                                        colors.accent.copy(alpha = 0.85f),
+                                        colors.accent.copy(alpha = 0.45f),
+                                    ),
+                                )
+                                else -> Brush.verticalGradient(
+                                    listOf(
+                                        colors.borderHighlightTop.copy(alpha = 0.38f),
+                                        colors.borderHighlightMid.copy(alpha = 0.18f),
+                                        colors.borderHighlightBottom.copy(alpha = 0.28f),
+                                    ),
+                                )
+                            }
                             val itemContentColor by animateColorAsState(
                                 targetValue = if (isSelected) colors.accent else colors.textStrong,
                                 animationSpec = tween(durationMillis = 200),
@@ -5367,10 +5570,10 @@ fun RightPlayAndSkinPanel(
                                             },
                                         )
                                         .clip(itemShape)
-                                        .background(if (isDragging) colors.surfaceCardSelected else itemBg)
+                                        .background(cardBgBrush)
                                         .border(
-                                            width = if (isDragging) 1.5.dp else 1.dp,
-                                            color = if (isDragging) colors.accent else itemBorder,
+                                            width = if (isDragging || isSelected) 1.5.dp else 1.dp,
+                                            brush = cardBorderBrush,
                                             shape = itemShape,
                                         )
                                         .padding(horizontal = 12.dp, vertical = 11.dp),
@@ -5423,11 +5626,30 @@ fun RightPlayAndSkinPanel(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Bottom,
         ) {
+            val skinBlurRadius by animateDpAsState(
+                targetValue = if (isChangePanelOpen) 14.dp else 0.dp,
+                animationSpec = spring(dampingRatio = 0.85f, stiffness = 380f),
+                label = "skinBlurRadius",
+            )
+
             Box(
                 modifier = Modifier
                     .weight(1f, fill = false)
                     .height(250.dp)
-                    .aspectRatio(0.82f),
+                    .aspectRatio(0.82f)
+                    .graphicsLayer {
+                        if (skinBlurRadius > 0.5.dp && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            val rPx = skinBlurRadius.toPx()
+                            renderEffect = BlurEffect(
+                                renderEffect = null,
+                                radiusX = rPx,
+                                radiusY = rPx,
+                                edgeTreatment = TileMode.Clamp,
+                            )
+                        } else {
+                            renderEffect = null
+                        }
+                    },
                 contentAlignment = Alignment.BottomCenter,
             ) {
                 SkinViewer(

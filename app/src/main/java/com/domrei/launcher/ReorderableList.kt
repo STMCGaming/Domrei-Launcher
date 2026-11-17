@@ -1,10 +1,12 @@
 package com.domrei.launcher
 
+import android.os.Build
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
@@ -18,14 +20,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.BlurEffect
+import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -52,6 +54,9 @@ class ReorderableState(
     private val onDragEndCallback: (() -> Unit)? = null,
     private val scope: CoroutineScope,
 ) {
+    var draggedKey by mutableStateOf<Any?>(null)
+        private set
+
     var draggedIndex by mutableStateOf<Int?>(null)
         private set
 
@@ -66,9 +71,19 @@ class ReorderableState(
     var justFinishedDrag by mutableStateOf(false)
         private set
 
-    fun onDragStart(index: Int) {
+    val isReordering: Boolean
+        get() = draggedKey != null || isDragging || offsetAnimatable.isRunning || draggedOffset != 0f
+
+    fun isItemDragging(index: Int, key: Any? = null): Boolean {
+        val matchesKey = key != null && draggedKey == key
+        val matchesIndex = draggedKey == null && draggedIndex == index
+        return (matchesKey || matchesIndex) && (isDragging || offsetAnimatable.isRunning || draggedOffset != 0f)
+    }
+
+    fun onDragStart(index: Int, key: Any? = null) {
         scope.launch {
             offsetAnimatable.snapTo(0f)
+            draggedKey = key
             draggedIndex = index
             isDragging = true
             justFinishedDrag = false
@@ -78,78 +93,68 @@ class ReorderableState(
 
     fun onDrag(dragAmountY: Float) {
         if (!isDragging) return
-        val currentIndex = draggedIndex ?: return
         val total = totalItemsCount()
+        if (total <= 1) return
+
+        val currentKey = draggedKey
+        val visibleItems = listState.layoutInfo.visibleItemsInfo
+        val currentItem = (if (currentKey != null) visibleItems.firstOrNull { it.key == currentKey } else null)
+            ?: visibleItems.firstOrNull { it.index == draggedIndex }
+            ?: return
+        val currentIndex = currentItem.index
 
         var newOffset = draggedOffset + dragAmountY
 
-        // Clamp offset at top and bottom of the list so it cannot fly off screen
-        if (currentIndex == 0 && newOffset < -70f) {
-            newOffset = -70f
-        } else if (currentIndex == total - 1 && newOffset > 70f) {
-            newOffset = 70f
+        // Elastic damping at list extremes so item stays visible and feels natural
+        if (currentIndex == 0 && newOffset < 0) {
+            newOffset = (newOffset * 0.35f).coerceAtLeast(-50f)
+        } else if (currentIndex == total - 1 && newOffset > 0) {
+            newOffset = (newOffset * 0.35f).coerceAtMost(50f)
         }
 
         scope.launch {
             offsetAnimatable.snapTo(newOffset)
         }
 
-        checkSwap(currentIndex, newOffset)
+        // Check neighbor swap using center distance hysteresis
+        val draggedCenterY = currentItem.offset + currentItem.size / 2f + newOffset
+
+        if (newOffset > 0 && currentIndex < total - 1) {
+            val nextItem = visibleItems.firstOrNull { it.index == currentIndex + 1 }
+            if (nextItem != null) {
+                val nextCenterY = nextItem.offset + nextItem.size / 2f
+                if (draggedCenterY > nextCenterY) {
+                    val distance = (nextItem.offset - currentItem.offset).toFloat()
+                    onMoveCallback(currentIndex, currentIndex + 1)
+                    val adjustedOffset = newOffset - distance
+                    scope.launch {
+                        offsetAnimatable.snapTo(adjustedOffset)
+                    }
+                    draggedIndex = currentIndex + 1
+                }
+            }
+        } else if (newOffset < 0 && currentIndex > 0) {
+            val prevItem = visibleItems.firstOrNull { it.index == currentIndex - 1 }
+            if (prevItem != null) {
+                val prevCenterY = prevItem.offset + prevItem.size / 2f
+                if (draggedCenterY < prevCenterY) {
+                    val distance = (currentItem.offset - prevItem.offset).toFloat()
+                    onMoveCallback(currentIndex, currentIndex - 1)
+                    val adjustedOffset = newOffset + distance
+                    scope.launch {
+                        offsetAnimatable.snapTo(adjustedOffset)
+                    }
+                    draggedIndex = currentIndex - 1
+                }
+            }
+        }
     }
 
     fun adjustOffsetForScroll(delta: Float) {
         if (!isDragging) return
-        val currentIndex = draggedIndex ?: return
         val newOffset = draggedOffset + delta
         scope.launch {
             offsetAnimatable.snapTo(newOffset)
-        }
-        checkSwap(currentIndex, newOffset)
-    }
-
-    private fun checkSwap(currentIndex: Int, currentOffset: Float) {
-        val total = totalItemsCount()
-        val visibleItems = listState.layoutInfo.visibleItemsInfo
-        val currentItem = visibleItems.firstOrNull { it.index == currentIndex } ?: return
-
-        if (currentOffset > 0 && currentIndex < total - 1) {
-            // Dragging down: check neighbor below
-            val nextItem = visibleItems.firstOrNull { it.index == currentIndex + 1 }
-            val distance = if (nextItem != null) {
-                (nextItem.offset - currentItem.offset).toFloat()
-            } else {
-                currentItem.size.toFloat() + 8f
-            }
-            val threshold = distance * 0.5f
-
-            if (currentOffset > threshold) {
-                val targetIndex = currentIndex + 1
-                onMoveCallback(currentIndex, targetIndex)
-                val newOffset = currentOffset - distance
-                scope.launch {
-                    offsetAnimatable.snapTo(newOffset)
-                }
-                draggedIndex = targetIndex
-            }
-        } else if (currentOffset < 0 && currentIndex > 0) {
-            // Dragging up: check neighbor above
-            val prevItem = visibleItems.firstOrNull { it.index == currentIndex - 1 }
-            val distance = if (prevItem != null) {
-                (currentItem.offset - prevItem.offset).toFloat()
-            } else {
-                currentItem.size.toFloat() + 8f
-            }
-            val threshold = distance * 0.5f
-
-            if (currentOffset < -threshold) {
-                val targetIndex = currentIndex - 1
-                onMoveCallback(currentIndex, targetIndex)
-                val newOffset = currentOffset + distance
-                scope.launch {
-                    offsetAnimatable.snapTo(newOffset)
-                }
-                draggedIndex = targetIndex
-            }
         }
     }
 
@@ -160,8 +165,12 @@ class ReorderableState(
         scope.launch {
             offsetAnimatable.animateTo(
                 targetValue = 0f,
-                animationSpec = spring(dampingRatio = 0.82f, stiffness = 550f),
+                animationSpec = spring(
+                    dampingRatio = 0.82f,
+                    stiffness = 450f,
+                ),
             )
+            draggedKey = null
             draggedIndex = null
             onDragEndCallback?.invoke()
             delay(150)
@@ -174,7 +183,14 @@ class ReorderableState(
         isDragging = false
         justFinishedDrag = true
         scope.launch {
-            offsetAnimatable.animateTo(0f, spring(dampingRatio = 0.82f, stiffness = 550f))
+            offsetAnimatable.animateTo(
+                targetValue = 0f,
+                animationSpec = spring(
+                    dampingRatio = 0.82f,
+                    stiffness = 450f,
+                ),
+            )
+            draggedKey = null
             draggedIndex = null
             onDragEndCallback?.invoke()
             delay(150)
@@ -211,9 +227,10 @@ fun rememberReorderableState(
     LaunchedEffect(state.isDragging) {
         if (!state.isDragging) return@LaunchedEffect
         while (state.isDragging) {
-            val currentIndex = state.draggedIndex ?: break
+            val currentKey = state.draggedKey
             val layoutInfo = state.listState.layoutInfo
-            val currentItem = layoutInfo.visibleItemsInfo.firstOrNull { it.index == currentIndex }
+            val currentItem = (if (currentKey != null) layoutInfo.visibleItemsInfo.firstOrNull { it.key == currentKey } else null)
+                ?: layoutInfo.visibleItemsInfo.firstOrNull { it.index == state.draggedIndex }
             if (currentItem != null) {
                 val viewportStart = layoutInfo.viewportStartOffset
                 val viewportEnd = layoutInfo.viewportEndOffset
@@ -248,67 +265,38 @@ fun rememberReorderableState(
 }
 
 /**
- * Custom hold-and-drag gesture recognizer with natural finger wobble tolerance
- * and responsive 320ms hold threshold.
+ * Standard Compose hold-and-drag gesture recognizer using [awaitLongPressOrCancellation].
+ * Triggers cleanly even if the user's finger is held completely still.
  */
 suspend fun PointerInputScope.detectHoldAndDrag(
     onDragStart: (Offset) -> Unit,
-    onDrag: (change: PointerInputChange, dragAmount: Offset) -> Unit,
+    onDrag: (dragAmountY: Float) -> Unit,
     onDragEnd: () -> Unit,
     onDragCancel: () -> Unit,
 ) {
-    val timeout = 320L
-    val slopPx = 18.dp.toPx()
-
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false)
-        var isHeld = false
-        val downPos = down.position
-        val downTime = System.currentTimeMillis()
+        val longPress = awaitLongPressOrCancellation(down.id)
+        if (longPress != null) {
+            longPress.consume()
+            onDragStart(longPress.position)
 
-        while (true) {
-            val event = awaitPointerEvent(PointerEventPass.Main)
-            val currentPointer = event.changes.firstOrNull { it.id == down.id } ?: break
-
-            if (!currentPointer.pressed) {
-                break
-            }
-
-            val elapsed = System.currentTimeMillis() - downTime
-            val movedDistance = (currentPointer.position - downPos).getDistance()
-
-            if (movedDistance > slopPx && elapsed < timeout) {
-                // User is scrolling / swiping, cancel hold
-                break
-            }
-
-            if (elapsed >= timeout) {
-                isHeld = true
-                currentPointer.consume()
-                break
-            }
-        }
-
-        if (isHeld) {
-            onDragStart(downPos)
             try {
                 while (true) {
                     val event = awaitPointerEvent(PointerEventPass.Main)
-                    val currentPointer = event.changes.firstOrNull { it.id == down.id } ?: break
-                    if (!currentPointer.pressed) {
-                        currentPointer.consume()
+                    val pointer = event.changes.firstOrNull { it.id == down.id } ?: break
+                    if (!pointer.pressed) {
+                        pointer.consume()
                         onDragEnd()
                         break
                     }
-                    val previousPos = currentPointer.previousPosition
-                    val currentPos = currentPointer.position
-                    val dragDelta = currentPos - previousPos
-                    currentPointer.consume()
-                    onDrag(currentPointer, dragDelta)
+                    val deltaY = pointer.position.y - pointer.previousPosition.y
+                    pointer.consume()
+                    onDrag(deltaY)
                 }
-            } catch (e: CancellationException) {
+            } catch (c: CancellationException) {
                 onDragCancel()
-                throw e
+                throw c
             }
         }
     }
@@ -317,7 +305,7 @@ suspend fun PointerInputScope.detectHoldAndDrag(
 /**
  * Modifier applied to each item in a reorderable list.
  * Listens for long-press to initiate dragging, tracks pointer motion,
- * and translates the active item vertically.
+ * translates the active item vertically, and blurs neighboring items like ProgressBar.
  */
 fun Modifier.reorderableItem(
     state: ReorderableState,
@@ -327,20 +315,47 @@ fun Modifier.reorderableItem(
     haptic: HapticFeedback? = null,
     soundPlayer: LauncherSoundPlayer? = null,
 ): Modifier = composed {
-    val isDragging = state.draggedIndex == index
+    val isCurrentItem = state.isItemDragging(index, key)
+    val isOtherItem = state.isReordering && !isCurrentItem
+
     val scale by animateFloatAsState(
-        targetValue = if (isDragging) 1.03f else 1f,
-        animationSpec = spring(dampingRatio = 0.8f, stiffness = 400f),
+        targetValue = if (isCurrentItem) 1.03f else 1f,
+        animationSpec = spring(dampingRatio = 0.8f, stiffness = 420f),
         label = "reorderScale",
     )
 
+    val shadowElevation by animateFloatAsState(
+        targetValue = if (isCurrentItem) 20f else 0f,
+        animationSpec = spring(dampingRatio = 0.8f, stiffness = 420f),
+        label = "reorderShadow",
+    )
+
+    val otherAlpha by animateFloatAsState(
+        targetValue = if (isOtherItem) 0.65f else 1f,
+        animationSpec = spring(dampingRatio = 0.85f, stiffness = 400f),
+        label = "reorderOtherAlpha",
+    )
+
+    val otherBlurPx = if (isOtherItem && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) 6f else 0f
+
     this
-        .zIndex(if (isDragging) 3f else 0f)
+        .zIndex(if (isCurrentItem) 3f else 0f)
         .graphicsLayer {
-            translationY = if (isDragging) state.draggedOffset else 0f
+            translationY = if (isCurrentItem) state.draggedOffset else 0f
             scaleX = scale
             scaleY = scale
-            shadowElevation = if (isDragging) 16f else 0f
+            this.shadowElevation = shadowElevation
+            alpha = otherAlpha
+            if (otherBlurPx > 0f) {
+                renderEffect = BlurEffect(
+                    renderEffect = null,
+                    radiusX = otherBlurPx,
+                    radiusY = otherBlurPx,
+                    edgeTreatment = TileMode.Clamp,
+                )
+            } else {
+                renderEffect = null
+            }
         }
         .then(
             if (enabled) {
@@ -349,10 +364,10 @@ fun Modifier.reorderableItem(
                         onDragStart = {
                             haptic?.performHapticFeedback(HapticFeedbackType.LongPress)
                             soundPlayer?.playBobble()
-                            state.onDragStart(index)
+                            state.onDragStart(index, key)
                         },
-                        onDrag = { change, dragAmount ->
-                            state.onDrag(dragAmount.y)
+                        onDrag = { deltaY ->
+                            state.onDrag(deltaY)
                         },
                         onDragEnd = {
                             state.onDragEnd()

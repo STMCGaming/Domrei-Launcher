@@ -150,12 +150,15 @@ import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
@@ -6164,11 +6167,27 @@ private fun DisplayAndRendererSettingsContent(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(
-                    text = stringResource(R.string.settings_current_renderer_format, selectedRenderer.displayName),
-                    color = colors.accent,
+                    text = buildAnnotatedString {
+                        withStyle(
+                            SpanStyle(
+                                color = colors.textPrimary,
+                                fontWeight = FontWeight.Medium,
+                            ),
+                        ) {
+                            append(stringResource(R.string.settings_current_renderer_prefix))
+                            append(" ")
+                        }
+                        withStyle(
+                            SpanStyle(
+                                color = colors.accent,
+                                fontWeight = FontWeight.SemiBold,
+                            ),
+                        ) {
+                            append(selectedRenderer.displayName)
+                        }
+                    },
                     style = MaterialTheme.typography.bodyMedium.copy(
                         fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
                     ),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,

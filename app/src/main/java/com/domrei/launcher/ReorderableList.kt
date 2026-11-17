@@ -93,19 +93,13 @@ class ReorderableState(
         val total = totalItemsCount()
         if (total <= 1) return
 
-        val currentKey = draggedKey
-        val visibleItems = listState.layoutInfo.visibleItemsInfo
-        val currentItem = (if (currentKey != null) visibleItems.firstOrNull { it.key == currentKey } else null)
-            ?: visibleItems.firstOrNull { it.index == draggedIndex }
-            ?: return
-        val currentIndex = currentItem.index
-
         var newOffset = draggedOffset + dragAmountY
 
         // Elastic damping at list extremes so item stays visible and feels natural
+        val currentIndex = findCurrentIndex() ?: return
         if (currentIndex == 0 && newOffset < 0) {
             newOffset = (newOffset * 0.35f).coerceAtLeast(-50f)
-        } else if (currentIndex == total - 1 && newOffset > 0) {
+        } else if (currentIndex >= total - 1 && newOffset > 0) {
             newOffset = (newOffset * 0.35f).coerceAtMost(50f)
         }
 
@@ -113,36 +107,71 @@ class ReorderableState(
             offsetAnimatable.snapTo(newOffset)
         }
 
-        // Check neighbor swap using center distance hysteresis
-        val draggedCenterY = currentItem.offset + currentItem.size / 2f + newOffset
+        checkSwap(newOffset)
+    }
 
-        if (newOffset > 0 && currentIndex < total - 1) {
+    private fun findCurrentIndex(): Int? {
+        val currentKey = draggedKey
+        val visibleItems = listState.layoutInfo.visibleItemsInfo
+        val itemByKey = if (currentKey != null) visibleItems.firstOrNull { it.key == currentKey } else null
+        if (itemByKey != null) return itemByKey.index
+        return draggedIndex
+    }
+
+    private fun checkSwap(currentOffset: Float) {
+        val total = totalItemsCount()
+        if (total <= 1) return
+
+        val visibleItems = listState.layoutInfo.visibleItemsInfo
+        val currentKey = draggedKey
+        val currentItem = (if (currentKey != null) visibleItems.firstOrNull { it.key == currentKey } else null)
+            ?: visibleItems.firstOrNull { it.index == draggedIndex }
+            ?: return
+        val currentIndex = currentItem.index
+
+        val draggedCenterY = currentItem.offset + currentItem.size / 2f + currentOffset
+
+        if (currentOffset > 0 && currentIndex < total - 1) {
             val nextItem = visibleItems.firstOrNull { it.index == currentIndex + 1 }
-            if (nextItem != null) {
-                val nextCenterY = nextItem.offset + nextItem.size / 2f
-                if (draggedCenterY > nextCenterY) {
-                    val distance = (nextItem.offset - currentItem.offset).toFloat()
-                    onMoveCallback(currentIndex, currentIndex + 1)
-                    val adjustedOffset = newOffset - distance
-                    scope.launch {
-                        offsetAnimatable.snapTo(adjustedOffset)
-                    }
-                    draggedIndex = currentIndex + 1
-                }
+            val nextCenterY = if (nextItem != null) {
+                nextItem.offset + nextItem.size / 2f
+            } else {
+                currentItem.offset + currentItem.size + 8f + currentItem.size / 2f
             }
-        } else if (newOffset < 0 && currentIndex > 0) {
-            val prevItem = visibleItems.firstOrNull { it.index == currentIndex - 1 }
-            if (prevItem != null) {
-                val prevCenterY = prevItem.offset + prevItem.size / 2f
-                if (draggedCenterY < prevCenterY) {
-                    val distance = (currentItem.offset - prevItem.offset).toFloat()
-                    onMoveCallback(currentIndex, currentIndex - 1)
-                    val adjustedOffset = newOffset + distance
-                    scope.launch {
-                        offsetAnimatable.snapTo(adjustedOffset)
-                    }
-                    draggedIndex = currentIndex - 1
+
+            if (draggedCenterY > nextCenterY) {
+                val distance = if (nextItem != null) {
+                    (nextItem.offset - currentItem.offset).toFloat()
+                } else {
+                    currentItem.size.toFloat() + 8f
                 }
+                onMoveCallback(currentIndex, currentIndex + 1)
+                val adjustedOffset = currentOffset - distance
+                scope.launch {
+                    offsetAnimatable.snapTo(adjustedOffset)
+                }
+                draggedIndex = currentIndex + 1
+            }
+        } else if (currentOffset < 0 && currentIndex > 0) {
+            val prevItem = visibleItems.firstOrNull { it.index == currentIndex - 1 }
+            val prevCenterY = if (prevItem != null) {
+                prevItem.offset + prevItem.size / 2f
+            } else {
+                currentItem.offset - 8f - currentItem.size / 2f
+            }
+
+            if (draggedCenterY < prevCenterY) {
+                val distance = if (prevItem != null) {
+                    (currentItem.offset - prevItem.offset).toFloat()
+                } else {
+                    currentItem.size.toFloat() + 8f
+                }
+                onMoveCallback(currentIndex, currentIndex - 1)
+                val adjustedOffset = currentOffset + distance
+                scope.launch {
+                    offsetAnimatable.snapTo(adjustedOffset)
+                }
+                draggedIndex = currentIndex - 1
             }
         }
     }
@@ -153,6 +182,7 @@ class ReorderableState(
         scope.launch {
             offsetAnimatable.snapTo(newOffset)
         }
+        checkSwap(newOffset)
     }
 
     fun onDragEnd() {
@@ -207,12 +237,13 @@ fun rememberReorderableState(
     val currentOnMove by rememberUpdatedState(onMove)
     val currentOnDragStart by rememberUpdatedState(onDragStart)
     val currentOnDragEnd by rememberUpdatedState(onDragEnd)
+    val currentTotalItemsCount by rememberUpdatedState(totalItemsCount)
     val scope = rememberCoroutineScope()
 
     val state = remember(listState) {
         ReorderableState(
             listState = listState,
-            totalItemsCount = totalItemsCount,
+            totalItemsCount = { currentTotalItemsCount() },
             onMoveCallback = { from, to -> currentOnMove(from, to) },
             onDragStartCallback = { currentOnDragStart?.invoke() },
             onDragEndCallback = { currentOnDragEnd?.invoke() },
@@ -302,7 +333,7 @@ suspend fun PointerInputScope.detectHoldAndDrag(
 /**
  * Modifier applied to each item in a reorderable list.
  * Listens for long-press to initiate dragging, tracks pointer motion,
- * and smoothly translates the active item vertically with elevation.
+ * and smoothly translates the active item vertically without casting any black box shadow.
  */
 fun Modifier.reorderableItem(
     state: ReorderableState,
@@ -315,15 +346,9 @@ fun Modifier.reorderableItem(
     val isCurrentItem = state.isItemDragging(index, key)
 
     val scale by animateFloatAsState(
-        targetValue = if (isCurrentItem) 1.03f else 1f,
+        targetValue = if (isCurrentItem) 1.02f else 1f,
         animationSpec = spring(dampingRatio = 0.8f, stiffness = 420f),
         label = "reorderScale",
-    )
-
-    val shadowElevation by animateFloatAsState(
-        targetValue = if (isCurrentItem) 20f else 0f,
-        animationSpec = spring(dampingRatio = 0.8f, stiffness = 420f),
-        label = "reorderShadow",
     )
 
     this
@@ -332,7 +357,8 @@ fun Modifier.reorderableItem(
             translationY = if (isCurrentItem) state.draggedOffset else 0f
             scaleX = scale
             scaleY = scale
-            this.shadowElevation = shadowElevation
+            // shadowElevation set to 0 to completely eliminate the black box outline artifact
+            shadowElevation = 0f
         }
         .then(
             if (enabled) {

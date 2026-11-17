@@ -27,6 +27,9 @@ data class GameLaunchRequest(
     val windowHeight: Int = 1080,
     val preferredRuntime: JavaRuntimeVersion? = null,
     val preferredRenderer: RendererType? = null,
+    val requestMaxRefreshRate: Boolean = false,
+    val useSystemVulkanDriver: Boolean = false,
+    val useSurfaceViewRendering: Boolean = true,
     val extraJvmArgs: List<String> = emptyList(),
     val extraGameArgs: List<String> = emptyList()
 ) {
@@ -58,7 +61,10 @@ data class MinecraftLaunchSpec(
     val gameArguments: List<String>,
     val environment: Map<String, String>,
     val windowWidth: Int = 1920,
-    val windowHeight: Int = 1080
+    val windowHeight: Int = 1080,
+    val requestMaxRefreshRate: Boolean = false,
+    val useSystemVulkanDriver: Boolean = false,
+    val useSurfaceViewRendering: Boolean = true
 ) {
     val classpathString: String
         get() = classpathEntries.joinToString(File.pathSeparator) { it.absolutePath }

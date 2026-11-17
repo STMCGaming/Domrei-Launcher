@@ -148,6 +148,9 @@ class DomreiJvmService : Service() {
                 put("environment", JSONObject(spec.environment))
                 put("windowWidth", spec.windowWidth)
                 put("windowHeight", spec.windowHeight)
+                put("requestMaxRefreshRate", spec.requestMaxRefreshRate)
+                put("useSystemVulkanDriver", spec.useSystemVulkanDriver)
+                put("useSurfaceViewRendering", spec.useSurfaceViewRendering)
             }
         }
 
@@ -210,7 +213,10 @@ class DomreiJvmService : Service() {
                 gameArguments = gameArgs,
                 environment = env,
                 windowWidth = json.optInt("windowWidth", 1920),
-                windowHeight = json.optInt("windowHeight", 1080)
+                windowHeight = json.optInt("windowHeight", 1080),
+                requestMaxRefreshRate = json.optBoolean("requestMaxRefreshRate", false),
+                useSystemVulkanDriver = json.optBoolean("useSystemVulkanDriver", false),
+                useSurfaceViewRendering = json.optBoolean("useSurfaceViewRendering", true)
             )
         }
     }

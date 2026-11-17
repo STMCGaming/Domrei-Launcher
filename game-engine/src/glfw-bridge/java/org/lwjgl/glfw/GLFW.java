@@ -574,7 +574,15 @@ public class GLFW
         memPutInt(mGLFWVideoMode.address() + mGLFWVideoMode.REDBITS, 8);
         memPutInt(mGLFWVideoMode.address() + mGLFWVideoMode.GREENBITS, 8);
         memPutInt(mGLFWVideoMode.address() + mGLFWVideoMode.BLUEBITS, 8);
-        memPutInt(mGLFWVideoMode.address() + mGLFWVideoMode.REFRESHRATE, 60);
+        int configuredRefreshRate = 60;
+        try {
+            String refresh = System.getProperty("domrei.refreshRate", System.getenv("DOMREI_REFRESH_RATE"));
+            if (refresh != null && !refresh.isEmpty()) {
+                int parsed = Math.round(Float.parseFloat(refresh));
+                if (parsed >= 30 && parsed <= 480) configuredRefreshRate = parsed;
+            }
+        } catch (Throwable ignored) { }
+        memPutInt(mGLFWVideoMode.address() + mGLFWVideoMode.REFRESHRATE, configuredRefreshRate);
 
         // A way to generate key code names
         Field[] thisFieldArr = GLFW.class.getFields();

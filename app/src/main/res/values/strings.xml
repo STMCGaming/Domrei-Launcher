@@ -117,6 +117,13 @@
     <string name="settings_renderer_title">Renderer</string>
     <string name="settings_current_renderer_prefix">Current:</string>
     <string name="settings_res_scale_title">Resolution Scaling</string>
+    <string name="settings_display_options_title">Display Options</string>
+    <string name="settings_max_refresh_rate_title">Request Max Refresh Rate</string>
+    <string name="settings_max_refresh_rate_description">Use the display’s highest refresh rate while playing</string>
+    <string name="settings_system_vulkan_title">Use System Vulkan Driver</string>
+    <string name="settings_system_vulkan_description">Use Android’s system Vulkan driver instead of the bundled GL driver</string>
+    <string name="settings_surface_view_title">SurfaceView Rendering</string>
+    <string name="settings_surface_view_description">Use a SurfaceView game surface like ZalithLauncher2</string>
     <string name="settings_sustained_perf_title">Sustained Performance Mode</string>
     <string name="settings_surface_vsync_title">Surface V-Sync</string>
     <string name="settings_memory_title">Allocated RAM (Memory)</string>

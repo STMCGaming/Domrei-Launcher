@@ -337,6 +337,12 @@ class DomreiGameEngine(
         renderer.jvmSystemProperties.forEach { (key, value) ->
             jvmArgs += "-D$key=$value"
         }
+        if (request.useSystemVulkanDriver) {
+            // Let LWJGL resolve Vulkan from the device's system driver (already on the
+            // library path via /system/lib64 and /vendor/lib64) instead of a bundled one.
+            jvmArgs += "-Dorg.lwjgl.vulkan.libname=libvulkan.so"
+            jvmArgs += "-Ddomrei.system.vulkan=true"
+        }
 
         val jsonJvmArgs = mutableListOf<String>()
         extractJsonArguments(baseJson.optJSONObject("arguments")?.optJSONArray("jvm"), placeholders, jsonJvmArgs)
@@ -398,6 +404,10 @@ class DomreiGameEngine(
         environment["DOMREI_WINDOW_WIDTH"] = request.windowWidth.toString()
         environment["DOMREI_WINDOW_HEIGHT"] = request.windowHeight.toString()
         environment.putAll(renderer.environmentVars)
+        if (request.useSystemVulkanDriver) {
+            environment["DOMREI_SYSTEM_VULKAN"] = "1"
+            environment["POJAV_VULKAN_DRIVER"] = "system"
+        }
 
         return MinecraftLaunchSpec(
             instanceName = request.instanceName,
@@ -415,7 +425,10 @@ class DomreiGameEngine(
             gameArguments = gameArgs,
             environment = environment,
             windowWidth = request.windowWidth,
-            windowHeight = request.windowHeight
+            windowHeight = request.windowHeight,
+            requestMaxRefreshRate = request.requestMaxRefreshRate,
+            useSystemVulkanDriver = request.useSystemVulkanDriver,
+            useSurfaceViewRendering = request.useSurfaceViewRendering
         )
     }
 

@@ -98,6 +98,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -184,6 +186,7 @@ import com.domrei.launcher.minecraft.MinecraftVersionFilter
 import com.domrei.launcher.minecraft.MinecraftVersionManifest
 import com.domrei.launcher.minecraft.OfficialMinecraftApi
 import com.domrei.launcher.ui.theme.DomreiLauncherTheme
+import com.domrei.launcher.ui.theme.LauncherColors
 import com.domrei.launcher.ui.theme.LauncherColorTokens
 import com.domrei.launcher.ui.theme.LauncherTheme
 import com.domrei.launcher.ui.theme.colorToHsv
@@ -495,6 +498,15 @@ fun LauncherScreen(
     var selectedRenderer by remember { mutableStateOf(gameEngine.rendererManager.getSelectedRenderer()) }
     val displayPrefs = remember(context) { DisplayPreferences(context) }
     var resolutionScale by remember { mutableIntStateOf(displayPrefs.loadResolutionScale()) }
+    var requestMaxRefreshRate by remember {
+        mutableStateOf(displayPrefs.loadRequestMaxRefreshRate())
+    }
+    var useSystemVulkanDriver by remember {
+        mutableStateOf(displayPrefs.loadUseSystemVulkanDriver())
+    }
+    var useSurfaceViewRendering by remember {
+        mutableStateOf(displayPrefs.loadUseSurfaceViewRendering())
+    }
     var instances by remember {
         mutableStateOf(preloaded?.instances ?: instanceManager.loadInstances())
     }
@@ -1224,6 +1236,21 @@ fun LauncherScreen(
                     displayPrefs.saveResolutionScale(newScale)
                     resolutionScale = newScale
                 },
+                requestMaxRefreshRate = requestMaxRefreshRate,
+                onRequestMaxRefreshRateChange = { enabled ->
+                    displayPrefs.saveRequestMaxRefreshRate(enabled)
+                    requestMaxRefreshRate = enabled
+                },
+                useSystemVulkanDriver = useSystemVulkanDriver,
+                onUseSystemVulkanDriverChange = { enabled ->
+                    displayPrefs.saveUseSystemVulkanDriver(enabled)
+                    useSystemVulkanDriver = enabled
+                },
+                useSurfaceViewRendering = useSurfaceViewRendering,
+                onUseSurfaceViewRenderingChange = { enabled ->
+                    displayPrefs.saveUseSurfaceViewRendering(enabled)
+                    useSurfaceViewRendering = enabled
+                },
                 screenWidth = screenWidth,
                 screenHeight = screenHeight,
                 backgroundConfig = currentBackground,
@@ -1318,6 +1345,9 @@ fun LauncherScreen(
                                         preferredRenderer = selectedRenderer,
                                         windowWidth = scaledWidth,
                                         windowHeight = scaledHeight,
+                                        requestMaxRefreshRate = requestMaxRefreshRate,
+                                        useSystemVulkanDriver = useSystemVulkanDriver,
+                                        useSurfaceViewRendering = useSurfaceViewRendering,
                                     )
                                     val launchResult = gameEngine.launchGame(
                                         request = request,
@@ -4167,6 +4197,12 @@ fun UnifiedLeftRailAndPanel(
     onRendererChange: (RendererType) -> Unit,
     resolutionScale: Int,
     onResolutionScaleChange: (Int) -> Unit,
+    requestMaxRefreshRate: Boolean,
+    onRequestMaxRefreshRateChange: (Boolean) -> Unit,
+    useSystemVulkanDriver: Boolean,
+    onUseSystemVulkanDriverChange: (Boolean) -> Unit,
+    useSurfaceViewRendering: Boolean,
+    onUseSurfaceViewRenderingChange: (Boolean) -> Unit,
     screenWidth: Dp,
     screenHeight: Dp,
     backgroundConfig: BackgroundConfig,
@@ -4353,6 +4389,12 @@ fun UnifiedLeftRailAndPanel(
                                     onRendererChange = onRendererChange,
                                     resolutionScale = resolutionScale,
                                     onResolutionScaleChange = onResolutionScaleChange,
+                                    requestMaxRefreshRate = requestMaxRefreshRate,
+                                    onRequestMaxRefreshRateChange = onRequestMaxRefreshRateChange,
+                                    useSystemVulkanDriver = useSystemVulkanDriver,
+                                    onUseSystemVulkanDriverChange = onUseSystemVulkanDriverChange,
+                                    useSurfaceViewRendering = useSurfaceViewRendering,
+                                    onUseSurfaceViewRenderingChange = onUseSurfaceViewRenderingChange,
                                 )
                             }
                         }
@@ -5819,6 +5861,12 @@ private fun SettingsPanelContent(
     onRendererChange: (RendererType) -> Unit,
     resolutionScale: Int,
     onResolutionScaleChange: (Int) -> Unit,
+    requestMaxRefreshRate: Boolean,
+    onRequestMaxRefreshRateChange: (Boolean) -> Unit,
+    useSystemVulkanDriver: Boolean,
+    onUseSystemVulkanDriverChange: (Boolean) -> Unit,
+    useSurfaceViewRendering: Boolean,
+    onUseSurfaceViewRenderingChange: (Boolean) -> Unit,
 ) {
     val colors = LauncherTheme.colors
     var selectedCategory by remember { mutableStateOf(SettingsCategory.DISPLAY_AND_RENDERER) }
@@ -5940,6 +5988,12 @@ private fun SettingsPanelContent(
                         onRendererChange = onRendererChange,
                         resolutionScale = resolutionScale,
                         onResolutionScaleChange = onResolutionScaleChange,
+                        requestMaxRefreshRate = requestMaxRefreshRate,
+                        onRequestMaxRefreshRateChange = onRequestMaxRefreshRateChange,
+                        useSystemVulkanDriver = useSystemVulkanDriver,
+                        onUseSystemVulkanDriverChange = onUseSystemVulkanDriverChange,
+                        useSurfaceViewRendering = useSurfaceViewRendering,
+                        onUseSurfaceViewRenderingChange = onUseSurfaceViewRenderingChange,
                     )
                 }
             }
@@ -6112,6 +6166,12 @@ private fun DisplayAndRendererSettingsContent(
     onRendererChange: (RendererType) -> Unit,
     resolutionScale: Int,
     onResolutionScaleChange: (Int) -> Unit,
+    requestMaxRefreshRate: Boolean,
+    onRequestMaxRefreshRateChange: (Boolean) -> Unit,
+    useSystemVulkanDriver: Boolean,
+    onUseSystemVulkanDriverChange: (Boolean) -> Unit,
+    useSurfaceViewRendering: Boolean,
+    onUseSurfaceViewRenderingChange: (Boolean) -> Unit,
 ) {
     val colors = LauncherTheme.colors
     var isRendererDropdownOpen by remember { mutableStateOf(false) }
@@ -6315,6 +6375,102 @@ private fun DisplayAndRendererSettingsContent(
                 inactiveTrackColor = colors.surfaceButton,
             ),
             modifier = Modifier.fillMaxWidth(),
+        )
+    }
+
+    // 3. Display options: refresh rate / Vulkan driver / game surface mode
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(cardShape)
+            .background(colors.surfaceCard)
+            .border(1.dp, colors.borderDefault, cardShape)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.settings_display_options_title),
+            color = colors.textPrimary,
+            style = MaterialTheme.typography.titleSmall.copy(
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+            ),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        DisplayToggleRow(
+            title = stringResource(R.string.settings_max_refresh_rate_title),
+            description = stringResource(R.string.settings_max_refresh_rate_description),
+            checked = requestMaxRefreshRate,
+            onCheckedChange = onRequestMaxRefreshRateChange,
+            colors = colors,
+        )
+        DisplayToggleRow(
+            title = stringResource(R.string.settings_system_vulkan_title),
+            description = stringResource(R.string.settings_system_vulkan_description),
+            checked = useSystemVulkanDriver,
+            onCheckedChange = onUseSystemVulkanDriverChange,
+            colors = colors,
+        )
+        DisplayToggleRow(
+            title = stringResource(R.string.settings_surface_view_title),
+            description = stringResource(R.string.settings_surface_view_description),
+            checked = useSurfaceViewRendering,
+            onCheckedChange = onUseSurfaceViewRenderingChange,
+            colors = colors,
+        )
+    }
+}
+
+@Composable
+private fun DisplayToggleRow(
+    title: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    colors: LauncherColors,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .smoothPressClickable(
+                pressScale = 0.98f,
+                onClick = { onCheckedChange(!checked) },
+            )
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = title,
+                color = colors.textPrimary,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                ),
+            )
+            Text(
+                text = description,
+                color = colors.textSubtle,
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 10.sp,
+                    lineHeight = 13.sp,
+                ),
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = colors.accent,
+                checkedTrackColor = colors.accent.copy(alpha = 0.55f),
+                uncheckedThumbColor = colors.textSecondary,
+                uncheckedTrackColor = colors.surfaceButton,
+            ),
         )
     }
 }

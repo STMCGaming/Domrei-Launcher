@@ -2,6 +2,7 @@ package com.domrei.gameengine
 
 import android.app.Activity
 import android.graphics.Color
+import android.graphics.SurfaceTexture
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
@@ -12,8 +13,10 @@ import android.os.Process
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
+import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.view.TextureView
 import android.view.View
 import android.view.Window
 import android.view.WindowInsets
@@ -40,7 +43,14 @@ import kotlin.concurrent.thread
  */
 class GameActivity : Activity(), SurfaceHolder.Callback {
 
-    private lateinit var surfaceView: SurfaceView
+    private var gameSurfaceView: SurfaceView? = null
+    private var gameTextureView: TextureView? = null
+    private var textureSurface: Surface? = null
+
+    /** The view currently hosting the game's rendering surface. */
+    private val surfaceHostView: View?
+        get() = gameSurfaceView ?: gameTextureView
+
     private lateinit var controlsContainer: FrameLayout
     private lateinit var logOverlayContainer: LinearLayout
     private lateinit var logScrollView: ScrollView
@@ -100,30 +110,70 @@ class GameActivity : Activity(), SurfaceHolder.Callback {
         targetResolutionWidth = earlySpec?.windowWidth ?: 0
         targetResolutionHeight = earlySpec?.windowHeight ?: 0
 
+        if (earlySpec?.requestMaxRefreshRate == true) {
+            applyMaxRefreshRate()
+        }
+
         val rootLayout = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
         }
 
-        // 1. Fullscreen SurfaceView for Minecraft OpenGL/EGL rendering + touch-to-mouse forwarding
-        surfaceView = SurfaceView(this).apply {
-            if (targetResolutionWidth > 0 && targetResolutionHeight > 0) {
-                holder.setFixedSize(targetResolutionWidth, targetResolutionHeight)
-            }
-            holder.addCallback(this@GameActivity)
-            isFocusable = true
-            isFocusableInTouchMode = true
-            setOnTouchListener { _, event ->
-                handleSurfaceTouchEvent(event)
-                true
-            }
-        }
-        rootLayout.addView(
-            surfaceView,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
+        // 1. Game surface. SurfaceView (ZalithLauncher2-style) is the default and gives the
+        //    renderer its own window; TextureView can be selected in Display and Renderer.
+        val surfaceParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT,
         )
+        val surfaceTouchListener = View.OnTouchListener { _, event ->
+            handleSurfaceTouchEvent(event)
+            true
+        }
+        if (earlySpec?.useSurfaceViewRendering != false) {
+            gameSurfaceView = SurfaceView(this).apply {
+                if (targetResolutionWidth > 0 && targetResolutionHeight > 0) {
+                    holder.setFixedSize(targetResolutionWidth, targetResolutionHeight)
+                }
+                holder.addCallback(this@GameActivity)
+                isFocusable = true
+                isFocusableInTouchMode = true
+                setOnTouchListener(surfaceTouchListener)
+            }
+            rootLayout.addView(gameSurfaceView, surfaceParams)
+        } else {
+            gameTextureView = TextureView(this).apply {
+                isFocusable = true
+                isFocusableInTouchMode = true
+                setOnTouchListener(surfaceTouchListener)
+                surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                    override fun onSurfaceTextureAvailable(
+                        texture: SurfaceTexture, width: Int, height: Int,
+                    ) {
+                        if (targetResolutionWidth > 0 && targetResolutionHeight > 0) {
+                            texture.setDefaultBufferSize(
+                                targetResolutionWidth, targetResolutionHeight
+                            )
+                        }
+                        val surface = Surface(texture)
+                        textureSurface = surface
+                        onGameSurfaceReady(surface, width, height)
+                    }
+
+                    override fun onSurfaceTextureSizeChanged(
+                        texture: SurfaceTexture, width: Int, height: Int,
+                    ) = onGameSurfaceSizeChanged(width, height)
+
+                    override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
+                        onGameSurfaceDestroyed()
+                        textureSurface?.release()
+                        textureSurface = null
+                        return true
+                    }
+
+                    override fun onSurfaceTextureUpdated(texture: SurfaceTexture) = Unit
+                }
+            }
+            rootLayout.addView(gameTextureView, surfaceParams)
+        }
 
         // 1b. On-screen touch controls overlay (WASD + Sneak + Jump + PRI/SEC + INV)
         controlsContainer = buildTouchControlsOverlay()
@@ -377,29 +427,42 @@ class GameActivity : Activity(), SurfaceHolder.Callback {
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
-        val surface = holder.surface
-        val winPtr = DomreiJliRunner.acquireNativeWindowPointer(surface)
-        activeNativeWindowPtr = winPtr
-
-        if (!jvmStarted) {
-            jvmStarted = true
-            val surfaceW = when {
-                currentSurfaceWidth > 0 -> currentSurfaceWidth
-                targetResolutionWidth > 0 -> targetResolutionWidth
-                surfaceView.width > 0 -> surfaceView.width
-                else -> 1920
-            }
-            val surfaceH = when {
-                currentSurfaceHeight > 0 -> currentSurfaceHeight
-                targetResolutionHeight > 0 -> targetResolutionHeight
-                surfaceView.height > 0 -> surfaceView.height
-                else -> 1080
-            }
-            startMinecraftJvmThread(winPtr, surfaceW, surfaceH)
-        }
+        onGameSurfaceReady(holder.surface, surfaceHostView?.width ?: 0, surfaceHostView?.height ?: 0)
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        onGameSurfaceSizeChanged(width, height)
+    }
+
+    override fun surfaceDestroyed(holder: SurfaceHolder) {
+        onGameSurfaceDestroyed()
+    }
+
+    /** Shared surface-ready path for both SurfaceView and TextureView. */
+    private fun onGameSurfaceReady(surface: Surface, width: Int, height: Int) {
+        val winPtr = DomreiJliRunner.acquireNativeWindowPointer(surface)
+        activeNativeWindowPtr = winPtr
+
+        if (jvmStarted) return
+        jvmStarted = true
+        val viewW = width.takeIf { it > 0 } ?: surfaceHostView?.width ?: 0
+        val viewH = height.takeIf { it > 0 } ?: surfaceHostView?.height ?: 0
+        val surfaceW = when {
+            currentSurfaceWidth > 0 -> currentSurfaceWidth
+            targetResolutionWidth > 0 -> targetResolutionWidth
+            viewW > 0 -> viewW
+            else -> 1920
+        }
+        val surfaceH = when {
+            currentSurfaceHeight > 0 -> currentSurfaceHeight
+            targetResolutionHeight > 0 -> targetResolutionHeight
+            viewH > 0 -> viewH
+            else -> 1080
+        }
+        startMinecraftJvmThread(winPtr, surfaceW, surfaceH)
+    }
+
+    private fun onGameSurfaceSizeChanged(width: Int, height: Int) {
         if (width > 0 && height > 0) {
             currentSurfaceWidth = width
             currentSurfaceHeight = height
@@ -410,11 +473,31 @@ class GameActivity : Activity(), SurfaceHolder.Callback {
         }
     }
 
-    override fun surfaceDestroyed(holder: SurfaceHolder) {
+    private fun onGameSurfaceDestroyed() {
         val ptr = activeNativeWindowPtr
         activeNativeWindowPtr = 0L
         if (ptr != 0L) {
             DomreiJliRunner.releaseNativeWindowPointer(ptr)
+        }
+    }
+
+    /** Switches the game window to the device's highest-refresh display mode. */
+    @Suppress("DEPRECATION")
+    private fun applyMaxRefreshRate() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val display = window.windowManager.defaultDisplay
+            val bestMode = display.supportedModes.maxByOrNull { it.refreshRate }
+            val refreshRate = bestMode?.refreshRate ?: display.refreshRate
+            if (bestMode != null) {
+                window.attributes = window.attributes.apply {
+                    preferredDisplayModeId = bestMode.modeId
+                }
+            }
+            // Visible to the in-process OpenJDK JVM and the GLFW bridge.
+            System.setProperty("domrei.refreshRate", refreshRate.toString())
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            window.setPreferMinimalPostProcessing(true)
         }
     }
 
@@ -449,10 +532,17 @@ class GameActivity : Activity(), SurfaceHolder.Callback {
                     arg.startsWith("-Ddomrei.window.height=") -> "-Ddomrei.window.height=$surfaceHeight"
                     else -> arg
                 }
+            }.toMutableList()
+            val refreshRate = System.getProperty("domrei.refreshRate")
+            if (rawSpec.requestMaxRefreshRate && refreshRate != null) {
+                updatedJvmArgs += "-Ddomrei.refreshRate=$refreshRate"
             }
             val updatedEnv = rawSpec.environment.toMutableMap().apply {
                 put("DOMREI_WINDOW_WIDTH", surfaceWidth.toString())
                 put("DOMREI_WINDOW_HEIGHT", surfaceHeight.toString())
+                if (rawSpec.requestMaxRefreshRate && refreshRate != null) {
+                    put("DOMREI_REFRESH_RATE", refreshRate)
+                }
             }
             val spec = rawSpec.copy(
                 jvmArguments = updatedJvmArgs,
@@ -805,8 +895,8 @@ class GameActivity : Activity(), SurfaceHolder.Callback {
             }
         } else {
             // GUI / Menu cursor mode: scale screen touch coordinates to match internal surface resolution
-            val viewW = surfaceView.width.takeIf { it > 0 } ?: 1
-            val viewH = surfaceView.height.takeIf { it > 0 } ?: 1
+            val viewW = surfaceHostView?.width?.takeIf { it > 0 } ?: 1
+            val viewH = surfaceHostView?.height?.takeIf { it > 0 } ?: 1
             val targetW = when {
                 currentSurfaceWidth > 0 -> currentSurfaceWidth
                 targetResolutionWidth > 0 -> targetResolutionWidth

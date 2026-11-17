@@ -6121,248 +6121,134 @@ private fun DisplayAndRendererSettingsContent(
 ) {
     val colors = LauncherTheme.colors
     var isRendererDropdownOpen by remember { mutableStateOf(false) }
+    val cardShape = RoundedCornerShape(16.dp)
 
-    // 1. Renderer Selection Card with option dropdown and animated resize
-    AppearanceSettingsCard(
-        title = stringResource(R.string.settings_renderer_title),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        val dropdownShape = RoundedCornerShape(12.dp)
-        val chevronRotation by animateFloatAsState(
-            targetValue = if (isRendererDropdownOpen) 180f else 0f,
-            animationSpec = spring(
-                dampingRatio = 0.72f,
-                stiffness = 420f,
+    // 1. Renderer Selection Card
+    val chevronRotation by animateFloatAsState(
+        targetValue = if (isRendererDropdownOpen) 180f else 0f,
+        animationSpec = spring(
+            dampingRatio = 0.72f,
+            stiffness = 420f,
+        ),
+        label = "rendererChevronRotation",
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(cardShape)
+            .background(colors.surfaceCard)
+            .border(1.dp, colors.borderDefault, cardShape)
+            .padding(14.dp)
+            .animateContentSize(
+                animationSpec = spring(
+                    dampingRatio = 0.82f,
+                    stiffness = 420f,
+                ),
             ),
-            label = "rendererChevronRotation",
-        )
-
-        Column(
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        // Clickable header row with "Renderer" on left, selected renderer name and chevron on right
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(dropdownShape)
-                .background(colors.surfaceButton)
-                .border(
-                    width = 1.dp,
-                    color = if (isRendererDropdownOpen) colors.borderSelectedCard else colors.borderButton,
-                    shape = dropdownShape,
-                )
-                .animateContentSize(
-                    animationSpec = spring(
-                        dampingRatio = 0.82f,
-                        stiffness = 420f,
-                    ),
+                .smoothPressClickable(
+                    pressScale = 0.98f,
+                    onClick = { isRendererDropdownOpen = !isRendererDropdownOpen },
                 ),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            // Trigger Row: Displays currently selected renderer & toggle chevron
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .smoothPressClickable(
-                        pressScale = 0.98f,
-                        onClick = { isRendererDropdownOpen = !isRendererDropdownOpen },
-                    )
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Row(
-                    modifier = Modifier.weight(1f),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Icon(
-                        painter = painterResource(id = R.drawable.ic_display_renderer),
-                        contentDescription = null,
-                        tint = colors.accent,
-                        modifier = Modifier.size(20.dp),
-                    )
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Text(
-                                text = selectedRenderer.displayName,
-                                color = colors.textPrimary,
-                                style = MaterialTheme.typography.bodyLarge.copy(
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                ),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            // Active badge
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(colors.accentContainer)
-                                    .border(1.dp, colors.accentBorder, RoundedCornerShape(6.dp))
-                                    .padding(horizontal = 7.dp, vertical = 2.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(
-                                    text = stringResource(R.string.renderer_badge_active),
-                                    color = colors.accent,
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                    ),
-                                )
-                            }
-                        }
-                        Text(
-                            text = "${selectedRenderer.glVersionLabel} • ${selectedRenderer.glslVersionLabel}",
-                            color = colors.textMuted,
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Normal,
-                            ),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
+            Text(
+                text = stringResource(R.string.settings_renderer_title),
+                color = colors.textPrimary,
+                style = MaterialTheme.typography.titleSmall.copy(
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                ),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
 
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    text = selectedRenderer.displayName,
+                    color = colors.accent,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                )
                 Icon(
                     painter = painterResource(id = R.drawable.ic_chevron_down),
                     contentDescription = stringResource(R.string.action_more_options),
                     tint = colors.textSecondary,
                     modifier = Modifier
-                        .size(20.dp)
+                        .size(18.dp)
                         .graphicsLayer { rotationZ = chevronRotation },
                 )
             }
+        }
 
-            // Dropdown Menu Body: Renderer options list with animated expansion
-            AnimatedVisibility(
-                visible = isRendererDropdownOpen,
-                enter = fadeIn(tween(180, easing = FastOutSlowInEasing)) + expandVertically(
-                    animationSpec = spring(dampingRatio = 0.82f, stiffness = 420f),
-                ),
-                exit = fadeOut(tween(140, easing = FastOutSlowInEasing)) + shrinkVertically(
-                    animationSpec = tween(180, easing = FastOutSlowInEasing),
-                ),
+        // Dropdown Menu Body: Renderer options list with animated expansion
+        AnimatedVisibility(
+            visible = isRendererDropdownOpen,
+            enter = fadeIn(tween(180, easing = FastOutSlowInEasing)) + expandVertically(
+                animationSpec = spring(dampingRatio = 0.82f, stiffness = 420f),
+            ),
+            exit = fadeOut(tween(140, easing = FastOutSlowInEasing)) + shrinkVertically(
+                animationSpec = tween(180, easing = FastOutSlowInEasing),
+            ),
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                Column(
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = 8.dp, end = 8.dp, bottom = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(1.dp)
-                            .background(colors.borderSubtle),
+                        .height(1.dp)
+                        .background(colors.borderSubtle),
+                )
+
+                Spacer(modifier = Modifier.height(2.dp))
+
+                RendererType.entries.forEach { renderer ->
+                    val isSelected = renderer == selectedRenderer
+                    val optionShape = RoundedCornerShape(8.dp)
+                    val optionBg by animateColorAsState(
+                        targetValue = if (isSelected) colors.surfaceCardSelected else colors.transparent,
+                        animationSpec = tween(durationMillis = 180),
+                        label = "rendererOptionBg_${renderer.id}",
                     )
 
-                    Spacer(modifier = Modifier.height(2.dp))
-
-                    RendererType.entries.forEach { renderer ->
-                        val isSelected = renderer == selectedRenderer
-                        val optionShape = RoundedCornerShape(10.dp)
-                        val optionBg by animateColorAsState(
-                            targetValue = if (isSelected) colors.surfaceCardSelected else colors.surfaceCard,
-                            animationSpec = tween(durationMillis = 180),
-                            label = "rendererOptionBg_${renderer.id}",
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .smoothPressClickable(
+                                pressScale = 0.98f,
+                                onClick = {
+                                    onRendererChange(renderer)
+                                    isRendererDropdownOpen = false
+                                },
+                            )
+                            .clip(optionShape)
+                            .background(optionBg)
+                            .padding(horizontal = 10.dp, vertical = 9.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            text = renderer.displayName,
+                            color = if (isSelected) colors.accent else colors.textPrimary,
+                            style = MaterialTheme.typography.bodyLarge.copy(
+                                fontSize = 13.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                            ),
                         )
-                        val optionBorder by animateColorAsState(
-                            targetValue = if (isSelected) colors.borderSelectedCard else colors.borderSubtle,
-                            animationSpec = tween(durationMillis = 180),
-                            label = "rendererOptionBorder_${renderer.id}",
-                        )
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .smoothPressClickable(
-                                    pressScale = 0.98f,
-                                    onClick = {
-                                        onRendererChange(renderer)
-                                        isRendererDropdownOpen = false
-                                    },
-                                )
-                                .clip(optionShape)
-                                .background(optionBg)
-                                .border(1.dp, optionBorder, optionShape)
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(3.dp),
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                ) {
-                                    Text(
-                                        text = renderer.displayName,
-                                        color = if (isSelected) colors.accent else colors.textPrimary,
-                                        style = MaterialTheme.typography.bodyLarge.copy(
-                                            fontSize = 13.sp,
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                        ),
-                                    )
-                                    if (isSelected) {
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(6.dp))
-                                                .background(colors.accentContainer)
-                                                .padding(horizontal = 6.dp, vertical = 2.dp),
-                                        ) {
-                                            Text(
-                                                text = stringResource(R.string.renderer_badge_active),
-                                                color = colors.accent,
-                                                style = MaterialTheme.typography.labelSmall.copy(
-                                                    fontSize = 9.sp,
-                                                    fontWeight = FontWeight.Bold,
-                                                ),
-                                            )
-                                        }
-                                    }
-                                }
-                                Text(
-                                    text = renderer.subtitle,
-                                    color = colors.textMuted,
-                                    style = MaterialTheme.typography.bodySmall.copy(
-                                        fontSize = 11.sp,
-                                        lineHeight = 15.sp,
-                                    ),
-                                )
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(4.dp))
-                                            .background(colors.white.copy(alpha = 0.08f))
-                                            .padding(horizontal = 6.dp, vertical = 2.dp),
-                                    ) {
-                                        Text(
-                                            text = renderer.glVersionLabel,
-                                            color = colors.white.copy(alpha = 0.70f),
-                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                        )
-                                    }
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(4.dp))
-                                            .background(colors.white.copy(alpha = 0.08f))
-                                            .padding(horizontal = 6.dp, vertical = 2.dp),
-                                    ) {
-                                        Text(
-                                            text = renderer.glslVersionLabel,
-                                            color = colors.white.copy(alpha = 0.70f),
-                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                        )
-                                    }
-                                }
-                            }
-                        }
                     }
                 }
             }
@@ -6370,61 +6256,39 @@ private fun DisplayAndRendererSettingsContent(
     }
 
     // 2. Display Resolution Scaling (Resize) Card
-    AppearanceSettingsCard(
-        title = stringResource(R.string.settings_res_scale_title),
-        modifier = Modifier.fillMaxWidth(),
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(cardShape)
+            .background(colors.surfaceCard)
+            .border(1.dp, colors.borderDefault, cardShape)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        val scaleSubtitle = when (resolutionScale) {
-            100 -> "100% • Native (Full Resolution)"
-            85 -> "85% • High Quality"
-            75 -> "75% • Balanced Performance"
-            50 -> "50% • Performance Mode"
-            else -> "$resolutionScale% Resolution Scale"
-        }
-
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    text = scaleSubtitle,
-                    color = colors.textPrimary,
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    ),
-                )
-                Text(
-                    text = "Adjusts game render surface size to boost FPS",
-                    color = colors.textMuted,
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-                )
-            }
-
-            AppearanceOptionButton(
-                label = stringResource(R.string.action_reset),
-                selected = false,
-                enabled = resolutionScale != 100,
-                onClick = { onResolutionScaleChange(100) },
+            Text(
+                text = stringResource(R.string.settings_res_scale_title),
+                color = colors.textPrimary,
+                style = MaterialTheme.typography.titleSmall.copy(
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                ),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
-        }
 
-        // Quick Preset Buttons Row
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            listOf(100, 85, 75, 50).forEach { preset ->
-                AppearanceOptionButton(
-                    label = "$preset%",
-                    selected = resolutionScale == preset,
-                    onClick = { onResolutionScaleChange(preset) },
-                    modifier = Modifier.weight(1f),
-                )
-            }
+            Text(
+                text = "$resolutionScale%",
+                color = colors.accent,
+                style = MaterialTheme.typography.titleSmall.copy(
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                ),
+            )
         }
 
         // Slider for fine resolution resize

@@ -114,7 +114,7 @@
     <string name="dialog_color_picker_hue">Hue</string>
     <string name="dialog_color_picker_hex_label">Hex Code</string>
     <string name="action_apply">Apply</string>
-    <string name="settings_renderer_title">Renderer Engine</string>
+    <string name="settings_renderer_title">Renderer</string>
     <string name="settings_res_scale_title">Resolution Scaling</string>
     <string name="settings_sustained_perf_title">Sustained Performance Mode</string>
     <string name="settings_surface_vsync_title">Surface V-Sync</string>

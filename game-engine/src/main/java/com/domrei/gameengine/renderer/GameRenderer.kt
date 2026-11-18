@@ -35,10 +35,23 @@ enum class RendererType(
         nativeLibFileName = "libng_gl4es.so",
         eglLibFileName = "libEGL.so",
         aarFileName = "NG-GL4ES-release.aar"
+    ),
+    CUSTOM_PLUGIN(
+        id = "custom_plugin",
+        displayName = "Custom Plugin",
+        subtitle = "ZalithLauncher2 / FCL renderer plugin",
+        glVersionLabel = "Plugin",
+        glslVersionLabel = "Plugin",
+        nativeLibFileName = "libGL.so",
+        eglLibFileName = "libEGL.so",
+        aarFileName = ""
     );
 
     companion object {
         fun fromId(id: String?): RendererType {
+            if (id != null && (id.startsWith("plugin:") || id.startsWith("custom_plugin"))) {
+                return CUSTOM_PLUGIN
+            }
             return entries.firstOrNull { it.id.equals(id, ignoreCase = true) } ?: MOBILE_GLUES
         }
     }
@@ -99,5 +112,6 @@ data class PreparedRenderer(
     val nativeLibDir: File,
     val configFile: File?,
     val environmentVars: Map<String, String>,
-    val jvmSystemProperties: Map<String, String>
+    val jvmSystemProperties: Map<String, String>,
+    val customDisplayName: String? = null
 )

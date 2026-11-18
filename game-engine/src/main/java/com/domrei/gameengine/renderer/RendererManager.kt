@@ -1,15 +1,19 @@
 package com.domrei.gameengine.renderer
 
 import android.content.Context
+import android.content.pm.PackageManager
 import com.domrei.gameengine.runtime.RuntimeAbi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.zip.ZipFile
@@ -32,16 +36,467 @@ class RendererManager(
     private val preferenceFile: File
         get() = File(externalRenderersDir, "selected_renderer.txt")
 
+    val pluginsDir: File
+        get() = File(externalRenderersDir, "plugins").apply { mkdirs() }
+
     fun getSelectedRenderer(): RendererType {
+        return getSelectedRendererDescriptor().effectiveType
+    }
+
+    fun getSelectedRendererDisplayName(): String {
+        return getSelectedRendererDescriptor().displayName
+    }
+
+    fun getSelectedRendererDescriptor(): RendererDescriptor {
         val savedId = runCatching {
             if (preferenceFile.isFile) preferenceFile.readText().trim() else null
         }.getOrNull()
-        return RendererType.fromId(savedId)
+        if (savedId.isNullOrBlank()) {
+            return RendererDescriptor.fromBuiltIn(RendererType.MOBILE_GLUES)
+        }
+        val all = getAvailableRenderers()
+        return all.firstOrNull { it.id.equals(savedId, ignoreCase = true) }
+            ?: all.firstOrNull { it.id.substringAfter("plugin:").equals(savedId.removePrefix("plugin:"), ignoreCase = true) }
+            ?: RendererDescriptor.fromBuiltIn(RendererType.fromId(savedId))
     }
 
     fun setSelectedRenderer(type: RendererType) {
         externalRenderersDir.mkdirs()
         preferenceFile.writeText(type.id)
+    }
+
+    fun setSelectedRenderer(descriptor: RendererDescriptor) {
+        externalRenderersDir.mkdirs()
+        preferenceFile.writeText(descriptor.id)
+    }
+
+    fun setSelectedRenderer(id: String) {
+        externalRenderersDir.mkdirs()
+        preferenceFile.writeText(id)
+    }
+
+    fun getAvailableRenderers(): List<RendererDescriptor> {
+        val list = mutableListOf<RendererDescriptor>()
+        list.add(RendererDescriptor.fromBuiltIn(RendererType.MOBILE_GLUES))
+        list.add(RendererDescriptor.fromBuiltIn(RendererType.KRYPTON_WRAPPER))
+        val plugins = getInstalledPlugins()
+        for (plugin in plugins) {
+            list.add(RendererDescriptor.fromPlugin(plugin))
+        }
+        return list
+    }
+
+    fun getInstalledPlugins(abi: RuntimeAbi = RuntimeAbi.detectDeviceAbi()): List<RendererPlugin> {
+        val result = mutableListOf<RendererPlugin>()
+        val seenIds = mutableSetOf<String>()
+
+        // 1. Scan directory plugins in externalRenderersDir/plugins
+        val subdirs = pluginsDir.listFiles { f -> f.isDirectory } ?: emptyArray()
+        for (dir in subdirs) {
+            val jsonFile = File(dir, "plugin.json")
+            if (jsonFile.isFile) {
+                runCatching {
+                    val json = JSONObject(jsonFile.readText())
+                    val id = json.getString("id")
+                    val displayName = json.getString("displayName")
+                    val glLib = json.optString("glLibFileName", "libGL.so")
+                    val eglLib = json.optString("eglLibFileName", "libEGL.so")
+                    val sourceFile = json.optString("sourceFileName").takeIf { it.isNotBlank() }?.let { File(dir, it) }
+
+                    val libDir = File(dir, "libs/${abi.androidAbi}").takeIf { it.isDirectory }
+                        ?: File(dir, "libs").takeIf { it.isDirectory }
+                        ?: dir
+                    val primaryLib = File(libDir, glLib)
+
+                    val envMap = linkedMapOf<String, String>()
+                    val envObj = json.optJSONObject("environment")
+                    if (envObj != null) {
+                        val keys = envObj.keys()
+                        while (keys.hasNext()) {
+                            val k = keys.next()
+                            envMap[k] = envObj.getString(k)
+                        }
+                    }
+
+                    val jvmMap = linkedMapOf<String, String>()
+                    val jvmObj = json.optJSONObject("jvmProperties")
+                    if (jvmObj != null) {
+                        val keys = jvmObj.keys()
+                        while (keys.hasNext()) {
+                            val k = keys.next()
+                            jvmMap[k] = jvmObj.getString(k)
+                        }
+                    }
+
+                    val dlopenLibs = mutableListOf<String>()
+                    val dlopenArr = json.optJSONArray("dlopenLibPaths")
+                    if (dlopenArr != null) {
+                        for (i in 0 until dlopenArr.length()) {
+                            dlopenLibs.add(dlopenArr.getString(i))
+                        }
+                    }
+
+                    if (seenIds.add(id)) {
+                        result.add(
+                            RendererPlugin(
+                                id = id,
+                                displayName = displayName,
+                                glLibFileName = glLib,
+                                eglLibFileName = eglLib,
+                                nativeLibDir = libDir,
+                                primaryLibFile = primaryLib,
+                                dlopenLibPaths = dlopenLibs,
+                                environment = envMap,
+                                jvmProperties = jvmMap,
+                                sourceFile = sourceFile,
+                                isInstalledApp = false,
+                                minMcVer = json.optString("minMcVer").takeIf { it.isNotBlank() },
+                                maxMcVer = json.optString("maxMcVer").takeIf { it.isNotBlank() }
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
+        // 2. Scan installed Android packages matching ZalithLauncher2 / FCL plugin metadata
+        val systemPlugins = scanInstalledPluginPackages()
+        for (plugin in systemPlugins) {
+            if (seenIds.add(plugin.id)) {
+                result.add(plugin)
+            }
+        }
+
+        return result
+    }
+
+    fun scanInstalledPluginPackages(): List<RendererPlugin> {
+        val context = appContext ?: return emptyList()
+        val pm = context.packageManager
+        val result = mutableListOf<RendererPlugin>()
+
+        val installedPackages = runCatching {
+            pm.getInstalledPackages(PackageManager.GET_META_DATA)
+        }.getOrNull() ?: emptyList()
+
+        for (pkg in installedPackages) {
+            val appInfo = pkg.applicationInfo ?: continue
+            val metaData = appInfo.metaData ?: continue
+
+            val hasV2 = metaData.containsKey("fclPlugin_V2")
+            val hasV1 = metaData.containsKey("fclPlugin")
+            val isRendererPkg = pkg.packageName.contains("renderer", ignoreCase = true)
+
+            if (hasV2 || hasV1 || isRendererPkg) {
+                var config: PluginConfigData? = null
+                if (hasV2) {
+                    val resId = metaData.getInt("fclPlugin_V2")
+                    val jsonStr = runCatching {
+                        if (resId != 0) {
+                            pm.getResourcesForApplication(appInfo).getString(resId)
+                        } else {
+                            metaData.getString("fclPlugin_V2")
+                        }
+                    }.getOrNull()
+                    if (!jsonStr.isNullOrBlank()) {
+                        config = PluginConfigData.parse(
+                            jsonStr = jsonStr,
+                            fallbackId = pkg.packageName,
+                            fallbackName = appInfo.loadLabel(pm).toString()
+                        )
+                    }
+                }
+
+                val fallbackName = appInfo.loadLabel(pm).toString().ifBlank { pkg.packageName }
+                val fallbackId = pkg.packageName
+                val finalConfig = config ?: PluginConfigData(
+                    id = fallbackId,
+                    displayName = fallbackName,
+                    glLibFileName = "libGL.so",
+                    eglLibFileName = "libEGL.so"
+                )
+
+                val nativeDir = File(appInfo.nativeLibraryDir)
+                val primaryLib = File(nativeDir, finalConfig.glLibFileName)
+
+                result.add(
+                    RendererPlugin(
+                        id = finalConfig.id,
+                        displayName = finalConfig.displayName,
+                        glLibFileName = finalConfig.glLibFileName,
+                        eglLibFileName = finalConfig.eglLibFileName,
+                        nativeLibDir = nativeDir,
+                        primaryLibFile = primaryLib,
+                        dlopenLibPaths = finalConfig.dlopenLibPaths,
+                        environment = finalConfig.environment,
+                        jvmProperties = finalConfig.jvmProperties,
+                        sourcePackage = pkg.packageName,
+                        isInstalledApp = true,
+                        minMcVer = finalConfig.minMcVer,
+                        maxMcVer = finalConfig.maxMcVer
+                    )
+                )
+            }
+        }
+        return result
+    }
+
+    fun importPlugin(file: File, originalName: String? = null): Result<RendererPlugin> = runCatching {
+        pluginsDir.mkdirs()
+        val nameToUse = originalName ?: file.name
+        val safeId = nameToUse.substringBeforeLast('.').lowercase().replace(Regex("[^a-z0-9_]"), "_").trim('_')
+        val pluginId = if (safeId.isBlank()) "plugin_${System.currentTimeMillis()}" else safeId
+        val targetDir = File(pluginsDir, pluginId).apply { mkdirs() }
+
+        val targetArchive = File(targetDir, nameToUse)
+        if (file.absolutePath != targetArchive.absolutePath) {
+            file.copyTo(targetArchive, overwrite = true)
+        }
+
+        val config = if (nameToUse.endsWith(".so", ignoreCase = true)) {
+            val abi = RuntimeAbi.detectDeviceAbi()
+            val libDir = File(targetDir, "libs/${abi.androidAbi}").apply { mkdirs() }
+            val soFile = File(libDir, nameToUse)
+            targetArchive.copyTo(soFile, overwrite = true)
+            soFile.setReadable(true, false)
+            soFile.setExecutable(true, false)
+            PluginConfigData(
+                id = pluginId,
+                displayName = nameToUse.removeSuffix(".so").replace('_', ' ').replace('-', ' ').trim(),
+                glLibFileName = nameToUse,
+                eglLibFileName = "libEGL.so"
+            )
+        } else {
+            extractPluginFromArchive(targetArchive, targetDir)
+        }
+
+        val finalTargetDir = if (config.id != pluginId && !File(pluginsDir, config.id).exists()) {
+            val renamed = File(pluginsDir, config.id)
+            if (targetDir.renameTo(renamed)) renamed else targetDir
+        } else {
+            targetDir
+        }
+
+        val pluginJson = JSONObject().apply {
+            put("id", config.id)
+            put("displayName", config.displayName)
+            put("glLibFileName", config.glLibFileName)
+            put("eglLibFileName", config.eglLibFileName)
+            put("dlopenLibPaths", JSONArray(config.dlopenLibPaths))
+            put("environment", JSONObject(config.environment))
+            put("jvmProperties", JSONObject(config.jvmProperties))
+            put("sourceFileName", targetArchive.name)
+            put("minMcVer", config.minMcVer ?: "")
+            put("maxMcVer", config.maxMcVer ?: "")
+        }
+        File(finalTargetDir, "plugin.json").writeText(pluginJson.toString(2))
+
+        val abi = RuntimeAbi.detectDeviceAbi()
+        val libDir = File(finalTargetDir, "libs/${abi.androidAbi}").takeIf { it.isDirectory }
+            ?: File(finalTargetDir, "libs").takeIf { it.isDirectory }
+            ?: finalTargetDir
+        val primaryLib = File(libDir, config.glLibFileName)
+
+        val plugin = RendererPlugin(
+            id = config.id,
+            displayName = config.displayName,
+            glLibFileName = config.glLibFileName,
+            eglLibFileName = config.eglLibFileName,
+            nativeLibDir = libDir,
+            primaryLibFile = primaryLib,
+            dlopenLibPaths = config.dlopenLibPaths,
+            environment = config.environment,
+            jvmProperties = config.jvmProperties,
+            sourceFile = targetArchive,
+            isInstalledApp = false,
+            minMcVer = config.minMcVer,
+            maxMcVer = config.maxMcVer
+        )
+
+        setSelectedRenderer(RendererDescriptor.fromPlugin(plugin))
+        plugin
+    }
+
+    fun importPluginFromStream(stream: InputStream, originalName: String): Result<RendererPlugin> = runCatching {
+        val tempFile = File.createTempFile("import_renderer_", "_$originalName")
+        try {
+            FileOutputStream(tempFile).use { output ->
+                stream.copyTo(output)
+            }
+            importPlugin(tempFile, originalName).getOrThrow()
+        } finally {
+            tempFile.delete()
+        }
+    }
+
+    fun deletePlugin(pluginId: String): Boolean {
+        val safeId = pluginId.removePrefix("plugin:")
+        var targetDir = File(pluginsDir, safeId)
+        if (!targetDir.isDirectory) {
+            val subdirs = pluginsDir.listFiles { f -> f.isDirectory } ?: emptyArray()
+            val matching = subdirs.firstOrNull { d ->
+                val jf = File(d, "plugin.json")
+                if (jf.isFile) {
+                    runCatching { JSONObject(jf.readText()).optString("id") == safeId }.getOrDefault(false)
+                } else false
+            }
+            if (matching != null) {
+                targetDir = matching
+            }
+        }
+        val deleted = if (targetDir.isDirectory) {
+            targetDir.deleteRecursively()
+        } else {
+            false
+        }
+        val savedId = runCatching {
+            if (preferenceFile.isFile) preferenceFile.readText().trim() else ""
+        }.getOrDefault("")
+        if (savedId.contains(safeId, ignoreCase = true)) {
+            setSelectedRenderer(RendererType.MOBILE_GLUES)
+        }
+        return deleted
+    }
+
+    private fun extractPluginFromArchive(
+        archiveFile: File,
+        targetDir: File,
+        abi: RuntimeAbi = RuntimeAbi.detectDeviceAbi()
+    ): PluginConfigData {
+        targetDir.mkdirs()
+        var detectedConfig: PluginConfigData? = null
+        val detectedSos = mutableListOf<String>()
+
+        val fallbackId = archiveFile.nameWithoutExtension.lowercase().replace(Regex("[^a-z0-9_]"), "_").trim('_')
+        val fallbackName = archiveFile.nameWithoutExtension.replace('_', ' ').replace('-', ' ').trim()
+
+        runCatching {
+            ZipFile(archiveFile).use { zip ->
+                val configEntryNames = listOf(
+                    "assets/config.json",
+                    "assets/renderer.json",
+                    "assets/fclPlugin.json",
+                    "assets/plugin.json",
+                    "config.json",
+                    "renderer.json",
+                    "plugin.json"
+                )
+                for (entryName in configEntryNames) {
+                    val entry = zip.getEntry(entryName)
+                    if (entry != null) {
+                        runCatching {
+                            zip.getInputStream(entry).bufferedReader().use { reader ->
+                                val text = reader.readText()
+                                if (text.isNotBlank()) {
+                                    detectedConfig = PluginConfigData.parse(text, fallbackId, fallbackName)
+                                }
+                            }
+                        }
+                        if (detectedConfig != null) break
+                    }
+                }
+
+                if (detectedConfig == null) {
+                    val entries = zip.entries()
+                    while (entries.hasMoreElements()) {
+                        val entry = entries.nextElement()
+                        val name = entry.name.lowercase()
+                        if (!entry.isDirectory && (name.endsWith("config.json") || name.endsWith("plugin.json") || name.endsWith("renderer.json"))) {
+                            runCatching {
+                                zip.getInputStream(entry).bufferedReader().use { reader ->
+                                    val text = reader.readText()
+                                    if (text.isNotBlank()) {
+                                        detectedConfig = PluginConfigData.parse(text, fallbackId, fallbackName)
+                                    }
+                                }
+                            }
+                            if (detectedConfig != null) break
+                        }
+                    }
+                }
+
+                val abiPrefix = "lib/${abi.androidAbi}/"
+                val jniPrefix = "jni/${abi.androidAbi}/"
+                val genericLibPrefix = "lib/"
+                val genericJniPrefix = "jni/"
+
+                val zipEntries = zip.entries()
+                while (zipEntries.hasMoreElements()) {
+                    val entry = zipEntries.nextElement()
+                    if (entry.isDirectory) continue
+                    val name = entry.name
+                    if (!name.endsWith(".so", ignoreCase = true)) continue
+
+                    val soFileName = name.substringAfterLast('/')
+                    val destDir = when {
+                        name.startsWith(abiPrefix) || name.startsWith(jniPrefix) -> {
+                            File(targetDir, "libs/${abi.androidAbi}").apply { mkdirs() }
+                        }
+                        name.startsWith(genericLibPrefix) || name.startsWith(genericJniPrefix) -> {
+                            val entryAbi = name.removePrefix(genericLibPrefix).removePrefix(genericJniPrefix).substringBefore('/')
+                            File(targetDir, "libs/$entryAbi").apply { mkdirs() }
+                        }
+                        else -> {
+                            File(targetDir, "libs/${abi.androidAbi}").apply { mkdirs() }
+                        }
+                    }
+
+                    val outFile = File(destDir, soFileName)
+                    zip.getInputStream(entry).use { input ->
+                        FileOutputStream(outFile).use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    outFile.setReadable(true, false)
+                    outFile.setExecutable(true, false)
+
+                    if (destDir.name == abi.androidAbi || destDir.parentFile?.name != "libs") {
+                        detectedSos.add(soFileName)
+                    }
+                }
+            }
+        }
+
+        if (detectedConfig == null && appContext != null) {
+            val pm = appContext.packageManager
+            runCatching {
+                val archiveInfo = pm.getPackageArchiveInfo(archiveFile.absolutePath, PackageManager.GET_META_DATA)
+                val appInfo = archiveInfo?.applicationInfo
+                val metaData = appInfo?.metaData
+                if (appInfo != null && metaData != null && metaData.containsKey("fclPlugin_V2")) {
+                    appInfo.sourceDir = archiveFile.absolutePath
+                    appInfo.publicSourceDir = archiveFile.absolutePath
+                    val resId = metaData.getInt("fclPlugin_V2")
+                    val jsonStr = if (resId != 0) {
+                        pm.getResourcesForApplication(appInfo).getString(resId)
+                    } else {
+                        metaData.getString("fclPlugin_V2")
+                    }
+                    if (!jsonStr.isNullOrBlank()) {
+                        detectedConfig = PluginConfigData.parse(jsonStr, fallbackId, fallbackName)
+                    }
+                }
+            }
+        }
+
+        val primaryGl = detectedConfig?.glLibFileName?.takeIf { it.isNotBlank() }
+            ?: detectedSos.firstOrNull { it.contains("gl", ignoreCase = true) }
+            ?: detectedSos.firstOrNull()
+            ?: "libGL.so"
+
+        val eglLib = detectedConfig?.eglLibFileName?.takeIf { it.isNotBlank() }
+            ?: detectedSos.firstOrNull { it.contains("egl", ignoreCase = true) }
+            ?: "libEGL.so"
+
+        return detectedConfig?.copy(
+            glLibFileName = primaryGl,
+            eglLibFileName = eglLib
+        ) ?: PluginConfigData(
+            id = fallbackId,
+            displayName = fallbackName,
+            glLibFileName = primaryGl,
+            eglLibFileName = eglLib
+        )
     }
 
     fun isRendererInstalled(
@@ -87,6 +542,108 @@ class RendererManager(
                 }
             }.thenBy { it.name }
         )
+    }
+
+    suspend fun prepareRenderer(
+        descriptor: RendererDescriptor = getSelectedRendererDescriptor(),
+        abi: RuntimeAbi = RuntimeAbi.detectDeviceAbi(),
+        mobileGluesConfig: MobileGluesConfig = MobileGluesConfig(),
+        kryptonConfig: KryptonWrapperConfig = KryptonWrapperConfig(),
+        forceReinstall: Boolean = false,
+        onProgress: (String, Float) -> Unit = { _, _ -> }
+    ): Result<PreparedRenderer> {
+        if (descriptor.isPlugin && descriptor.pluginInfo != null) {
+            return preparePluginRenderer(
+                plugin = descriptor.pluginInfo,
+                abi = abi,
+                forceReinstall = forceReinstall,
+                onProgress = onProgress
+            )
+        }
+        val type = descriptor.builtInType ?: RendererType.MOBILE_GLUES
+        return prepareRenderer(
+            type = type,
+            abi = abi,
+            mobileGluesConfig = mobileGluesConfig,
+            kryptonConfig = kryptonConfig,
+            forceReinstall = forceReinstall,
+            onProgress = onProgress
+        )
+    }
+
+    suspend fun preparePluginRenderer(
+        plugin: RendererPlugin,
+        abi: RuntimeAbi = RuntimeAbi.detectDeviceAbi(),
+        forceReinstall: Boolean = false,
+        onProgress: (String, Float) -> Unit = { _, _ -> }
+    ): Result<PreparedRenderer> = withContext(Dispatchers.IO) {
+        runCatching {
+            onProgress("Preparing ${plugin.displayName} plugin...", 0.1f)
+
+            val activeLibDir = when {
+                plugin.isInstalledApp -> plugin.nativeLibDir
+                File(plugin.nativeLibDir, abi.androidAbi).isDirectory -> File(plugin.nativeLibDir, abi.androidAbi)
+                else -> plugin.nativeLibDir
+            }.apply { mkdirs() }
+
+            // Ensure Android LWJGL 3.3.3 & OpenAL native .so libraries are in activeLibDir
+            runCatching {
+                ensureAndroidLwjglAndOpenAlNatives(
+                    abi = abi,
+                    targetDir = activeLibDir,
+                    forceReinstall = forceReinstall,
+                    onProgress = onProgress
+                )
+            }.onFailure { if (it is CancellationException) throw it }
+
+            var primaryGlFile = File(activeLibDir, plugin.glLibFileName)
+            if (!primaryGlFile.isFile || primaryGlFile.length() == 0L) {
+                val fallbackSo = activeLibDir.listFiles { f -> f.isFile && f.name.endsWith(".so") }
+                    ?.firstOrNull { it.name.contains("gl", ignoreCase = true) }
+                    ?: activeLibDir.listFiles { f -> f.isFile && f.name.endsWith(".so") }?.firstOrNull()
+                if (fallbackSo != null) {
+                    primaryGlFile = fallbackSo
+                }
+            }
+
+            primaryGlFile.setReadable(true, false)
+            primaryGlFile.setExecutable(true, false)
+
+            val envVars = linkedMapOf<String, String>()
+            envVars["POJAV_RENDERER"] = plugin.id
+            envVars["DOMREI_RENDERER"] = plugin.id
+            envVars["LIBGL_ES"] = "3"
+            envVars["LIBGL_EGL"] = plugin.eglLibFileName
+            envVars.putAll(plugin.environment)
+
+            val jvmProps = linkedMapOf<String, String>()
+            jvmProps["org.lwjgl.opengl.libname"] = primaryGlFile.name
+            jvmProps["org.lwjgl.egl.libname"] = plugin.eglLibFileName
+            jvmProps["domrei.renderer.id"] = plugin.id
+            jvmProps["domrei.renderer.lib"] = primaryGlFile.absolutePath
+            jvmProps.putAll(plugin.jvmProperties)
+
+            val freetypeSo = File(activeLibDir, "libfreetype.so")
+            if (freetypeSo.isFile) {
+                jvmProps["org.lwjgl.freetype.libname"] = freetypeSo.absolutePath
+            }
+            val openalSo = File(activeLibDir, "libopenal.so")
+            if (openalSo.isFile) {
+                jvmProps["org.lwjgl.openal.libname"] = openalSo.absolutePath
+            }
+
+            onProgress("${plugin.displayName} ready", 1f)
+
+            PreparedRenderer(
+                type = RendererType.CUSTOM_PLUGIN,
+                nativeLibFile = primaryGlFile,
+                nativeLibDir = activeLibDir,
+                configFile = null,
+                environmentVars = envVars,
+                jvmSystemProperties = jvmProps,
+                customDisplayName = plugin.displayName
+            )
+        }.onFailure { if (it is CancellationException) throw it }
     }
 
     /**
@@ -169,7 +726,8 @@ class RendererManager(
                         writeText(jsonStr)
                     }
                 }
-                RendererType.KRYPTON_WRAPPER -> null
+                RendererType.KRYPTON_WRAPPER,
+                RendererType.CUSTOM_PLUGIN -> null
             }
 
             val envVars = buildRendererEnvironment(
@@ -235,6 +793,12 @@ class RendererManager(
                 env["LIBGL_MIPMAP"] = kryptonConfig.mipmapMode.toString()
                 env["LIBGL_VBO"] = if (kryptonConfig.vboEnable) "1" else "0"
                 env["KRYPTON_LIB_PATH"] = nativeLibFile.absolutePath
+            }
+            RendererType.CUSTOM_PLUGIN -> {
+                env["POJAV_RENDERER"] = RendererType.CUSTOM_PLUGIN.id
+                env["DOMREI_RENDERER"] = RendererType.CUSTOM_PLUGIN.id
+                env["LIBGL_ES"] = "3"
+                env["LIBGL_EGL"] = type.eglLibFileName
             }
         }
         return env

@@ -137,6 +137,7 @@ class DomreiJvmService : Service() {
                 put("rendererNativeLibFile", spec.renderer.nativeLibFile.absolutePath)
                 put("rendererNativeLibDir", spec.renderer.nativeLibDir.absolutePath)
                 put("rendererConfigFile", spec.renderer.configFile?.absolutePath ?: "")
+                put("rendererCustomDisplayName", spec.renderer.customDisplayName ?: "")
                 put("rendererEnv", JSONObject(spec.renderer.environmentVars))
                 put("rendererJvmProps", JSONObject(spec.renderer.jvmSystemProperties))
                 put("gameDir", spec.gameDir.absolutePath)
@@ -182,7 +183,8 @@ class DomreiJvmService : Service() {
                 nativeLibDir = File(json.getString("rendererNativeLibDir")),
                 configFile = json.optString("rendererConfigFile").takeIf { it.isNotBlank() }?.let(::File),
                 environmentVars = rendererEnv,
-                jvmSystemProperties = rendererProps
+                jvmSystemProperties = rendererProps,
+                customDisplayName = json.optString("rendererCustomDisplayName").takeIf { it.isNotBlank() }
             )
 
             val cpArr = json.optJSONArray("classpathEntries") ?: JSONArray()

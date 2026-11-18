@@ -7,6 +7,7 @@ import com.domrei.gameengine.log.EngineLogManager
 import com.domrei.gameengine.renderer.KryptonWrapperConfig
 import com.domrei.gameengine.renderer.MobileGluesConfig
 import com.domrei.gameengine.renderer.PreparedRenderer
+import com.domrei.gameengine.renderer.RendererDescriptor
 import com.domrei.gameengine.renderer.RendererManager
 import com.domrei.gameengine.renderer.RendererType
 import com.domrei.gameengine.runtime.DomreiJliRunner
@@ -130,7 +131,12 @@ class DomreiGameEngine(
                 ?.takeIf { it > 0 }
             val targetRuntimeVersion = request.preferredRuntime
                 ?: JdkManager.selectRuntimeForMinecraft(request.minecraftVersion, jsonJavaMajor)
-            val targetRendererType = request.preferredRenderer ?: rendererManager.getSelectedRenderer()
+            val targetRendererDescriptor = if (request.preferredRenderer != null && request.preferredRenderer != RendererType.CUSTOM_PLUGIN) {
+                RendererDescriptor.fromBuiltIn(request.preferredRenderer)
+            } else {
+                rendererManager.getSelectedRendererDescriptor()
+            }
+            val targetRendererType = targetRendererDescriptor.effectiveType
 
             _status.value = GameEngineStatus(
                 state = GameEngineState.PREPARING_RUNTIME,
@@ -158,12 +164,12 @@ class DomreiGameEngine(
 
             _status.value = _status.value.copy(
                 state = GameEngineState.PREPARING_RENDERER,
-                stageMessage = "Preparing ${targetRendererType.displayName} renderer...",
+                stageMessage = "Preparing ${targetRendererDescriptor.displayName} renderer...",
                 progress = 0.62f
             )
 
             val preparedRenderer = rendererManager.prepareRenderer(
-                type = targetRendererType,
+                descriptor = targetRendererDescriptor,
                 abi = abi,
                 mobileGluesConfig = mobileGluesConfig,
                 kryptonConfig = kryptonConfig
@@ -176,7 +182,7 @@ class DomreiGameEngine(
                 onProgress(stage, overall)
             }.getOrThrow()
 
-            appendLog("[DomreiEngine] Renderer ready: ${preparedRenderer.type.displayName} (${preparedRenderer.nativeLibFile.name})")
+            appendLog("[DomreiEngine] Renderer ready: ${preparedRenderer.customDisplayName ?: preparedRenderer.type.displayName} (${preparedRenderer.nativeLibFile.name})")
 
             _status.value = _status.value.copy(
                 state = GameEngineState.BUILDING_SPEC,

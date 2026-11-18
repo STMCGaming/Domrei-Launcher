@@ -550,7 +550,7 @@ class GameActivity : Activity(), SurfaceHolder.Callback {
             )
 
             mainHandler.post {
-                statusBadgeView.text = "${spec.instanceName} • ${spec.renderer.type.displayName}"
+                statusBadgeView.text = "${spec.instanceName} • ${spec.renderer.customDisplayName ?: spec.renderer.type.displayName}"
             }
 
             val exitFile = File(spec.gameDir, DomreiJvmService.EXIT_FILE_NAME)

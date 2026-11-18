@@ -1,5 +1,6 @@
 package com.domrei.launcher
 
+import android.content.ContentResolver
 import android.graphics.Bitmap
 import android.graphics.Canvas as AndroidCanvas
 import android.graphics.Paint as AndroidPaint
@@ -7,6 +8,7 @@ import android.graphics.Rect as AndroidRect
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.util.Log
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -171,11 +173,12 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 import com.domrei.gameengine.DomreiGameEngine
 import com.domrei.gameengine.GameEngineState
 import com.domrei.gameengine.GameLaunchRequest
+import com.domrei.gameengine.renderer.RendererDescriptor
 import com.domrei.gameengine.renderer.RendererType
 import com.domrei.launcher.minecraft.DownloadFileItem
 import com.domrei.launcher.minecraft.DownloadStageStatus
@@ -379,6 +382,7 @@ sealed interface LauncherDialog {
     data class RenameAccount(val account: LauncherAccount) : LauncherDialog
     data class ConfirmRemoveAccount(val account: LauncherAccount) : LauncherDialog
     data class ConfirmRemoveInstance(val instance: LauncherInstance) : LauncherDialog
+    data class ConfirmDeletePlugin(val descriptor: RendererDescriptor) : LauncherDialog
     data object AddInstance : LauncherDialog
     data class PickAccentColor(val initialColor: Color) : LauncherDialog
 }
@@ -495,7 +499,13 @@ fun LauncherScreen(
     val instanceManager = remember(context) { MinecraftInstanceManager(context) }
     val gameEngine = remember(context) { DomreiGameEngine(context) }
     val engineStatus by gameEngine.status.collectAsState()
-    var selectedRenderer by remember { mutableStateOf(gameEngine.rendererManager.getSelectedRenderer()) }
+    var selectedRendererDescriptor by remember {
+        mutableStateOf(gameEngine.rendererManager.getSelectedRendererDescriptor())
+    }
+    var availableRenderers by remember {
+        mutableStateOf(gameEngine.rendererManager.getAvailableRenderers())
+    }
+    val selectedRenderer = selectedRendererDescriptor.effectiveType
     val displayPrefs = remember(context) { DisplayPreferences(context) }
     var resolutionScale by remember { mutableIntStateOf(displayPrefs.loadResolutionScale()) }
     var requestMaxRefreshRate by remember {
@@ -581,7 +591,7 @@ fun LauncherScreen(
                         status = if (engineStatus.state == GameEngineState.PREPARING_RUNTIME) DownloadStageStatus.DOWNLOADING else DownloadStageStatus.DONE,
                     ),
                     DownloadFileItem(
-                        fileName = "PREPARING_RENDERER (${engineStatus.activeRenderer?.displayName ?: selectedRenderer.displayName})",
+                        fileName = "PREPARING_RENDERER (${engineStatus.activeRenderer?.displayName ?: selectedRendererDescriptor.displayName})",
                         sizeMb = 5f,
                         progress = when (engineStatus.state) {
                             GameEngineState.PREPARING_RUNTIME -> 0f
@@ -732,6 +742,47 @@ fun LauncherScreen(
     }
     val launchMediaPicker: () -> Unit = {
         mediaPickerLauncher?.launch(arrayOf("image/*", "video/*"))
+    }
+
+    val pluginPickerLauncher = if (!isInPreview) {
+        rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.OpenDocument(),
+        ) { uri ->
+            if (uri != null) {
+                coroutineScope.launch(Dispatchers.IO) {
+                    runCatching {
+                        val fileName = queryOpenableDisplayName(context.contentResolver, uri) ?: "plugin.apk"
+                        context.contentResolver.openInputStream(uri)?.use { stream ->
+                            gameEngine.rendererManager.importPluginFromStream(stream, fileName)
+                        }?.getOrThrow()
+                    }.onSuccess { imported ->
+                        if (imported != null) {
+                            val desc = RendererDescriptor.fromPlugin(imported)
+                            gameEngine.rendererManager.setSelectedRenderer(desc)
+                            withContext(Dispatchers.Main) {
+                                availableRenderers = gameEngine.rendererManager.getAvailableRenderers()
+                                selectedRendererDescriptor = desc
+                                Toast.makeText(
+                                    context,
+                                    context.getString(R.string.settings_plugin_imported_success, imported.displayName),
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                        }
+                    }.onFailure { error ->
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(
+                                context,
+                                context.getString(R.string.settings_plugin_import_failed, error.message ?: "Unknown error"),
+                                Toast.LENGTH_LONG,
+                            ).show()
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        null
     }
 
     val soundPlayer = remember(context, isInPreview) {
@@ -1226,30 +1277,22 @@ fun LauncherScreen(
                 onOpenAccentColorPicker = {
                     activeDialog = LauncherDialog.PickAccentColor(initialColor = accentColor)
                 },
-                selectedRenderer = selectedRenderer,
-                onRendererChange = { newRenderer ->
-                    gameEngine.rendererManager.setSelectedRenderer(newRenderer)
-                    selectedRenderer = newRenderer
+                selectedRendererDescriptor = selectedRendererDescriptor,
+                availableRenderers = availableRenderers,
+                onRendererSelect = { newDescriptor ->
+                    gameEngine.rendererManager.setSelectedRenderer(newDescriptor)
+                    selectedRendererDescriptor = newDescriptor
+                },
+                onImportPlugin = {
+                    pluginPickerLauncher?.launch(arrayOf("*/*"))
+                },
+                onDeletePlugin = { descriptor ->
+                    activeDialog = LauncherDialog.ConfirmDeletePlugin(descriptor)
                 },
                 resolutionScale = resolutionScale,
                 onResolutionScaleChange = { newScale ->
                     displayPrefs.saveResolutionScale(newScale)
                     resolutionScale = newScale
-                },
-                requestMaxRefreshRate = requestMaxRefreshRate,
-                onRequestMaxRefreshRateChange = { enabled ->
-                    displayPrefs.saveRequestMaxRefreshRate(enabled)
-                    requestMaxRefreshRate = enabled
-                },
-                useSystemVulkanDriver = useSystemVulkanDriver,
-                onUseSystemVulkanDriverChange = { enabled ->
-                    displayPrefs.saveUseSystemVulkanDriver(enabled)
-                    useSystemVulkanDriver = enabled
-                },
-                useSurfaceViewRendering = useSurfaceViewRendering,
-                onUseSurfaceViewRenderingChange = { enabled ->
-                    displayPrefs.saveUseSurfaceViewRendering(enabled)
-                    useSurfaceViewRendering = enabled
                 },
                 screenWidth = screenWidth,
                 screenHeight = screenHeight,
@@ -1371,7 +1414,7 @@ fun LauncherScreen(
                                                     status = if (fraction >= 0.60f) DownloadStageStatus.DONE else DownloadStageStatus.DOWNLOADING,
                                                 ),
                                                 DownloadFileItem(
-                                                    fileName = "PREPARING_RENDERER (${selectedRenderer.displayName})",
+                                                    fileName = "PREPARING_RENDERER (${selectedRendererDescriptor.displayName})",
                                                     sizeMb = 6f,
                                                     progress = ((fraction - 0.60f) / 0.28f).coerceIn(0f, 1f),
                                                     status = when {
@@ -1577,6 +1620,30 @@ fun LauncherScreen(
                             instances = remaining
                             if (selectedInstanceId == dialog.instance.id) {
                                 selectedInstanceId = remaining.firstOrNull()?.id.orEmpty()
+                            }
+                            activeDialog = null
+                        },
+                    )
+                }
+                is LauncherDialog.ConfirmDeletePlugin -> {
+                    LauncherConfirmDialogContent(
+                        title = stringResource(R.string.dialog_confirm_delete_plugin_title),
+                        message = stringResource(
+                            R.string.dialog_confirm_delete_plugin_message,
+                            dialog.descriptor.displayName,
+                        ),
+                        confirmText = stringResource(R.string.action_remove),
+                        onCancel = { activeDialog = null },
+                        onConfirm = {
+                            dialog.descriptor.pluginInfo?.let { plugin ->
+                                gameEngine.rendererManager.deletePlugin(plugin.id)
+                                availableRenderers = gameEngine.rendererManager.getAvailableRenderers()
+                                selectedRendererDescriptor = gameEngine.rendererManager.getSelectedRendererDescriptor()
+                                Toast.makeText(
+                                    context,
+                                    context.getString(R.string.settings_plugin_deleted, plugin.displayName),
+                                    Toast.LENGTH_SHORT,
+                                ).show()
                             }
                             activeDialog = null
                         },
@@ -4193,16 +4260,13 @@ fun UnifiedLeftRailAndPanel(
     onResetBackground: () -> Unit,
     onAccentColorChange: (Color) -> Unit,
     onOpenAccentColorPicker: () -> Unit,
-    selectedRenderer: RendererType,
-    onRendererChange: (RendererType) -> Unit,
+    selectedRendererDescriptor: RendererDescriptor,
+    availableRenderers: List<RendererDescriptor>,
+    onRendererSelect: (RendererDescriptor) -> Unit,
+    onImportPlugin: () -> Unit = {},
+    onDeletePlugin: (RendererDescriptor) -> Unit = {},
     resolutionScale: Int,
     onResolutionScaleChange: (Int) -> Unit,
-    requestMaxRefreshRate: Boolean,
-    onRequestMaxRefreshRateChange: (Boolean) -> Unit,
-    useSystemVulkanDriver: Boolean,
-    onUseSystemVulkanDriverChange: (Boolean) -> Unit,
-    useSurfaceViewRendering: Boolean,
-    onUseSurfaceViewRenderingChange: (Boolean) -> Unit,
     screenWidth: Dp,
     screenHeight: Dp,
     backgroundConfig: BackgroundConfig,
@@ -4385,16 +4449,13 @@ fun UnifiedLeftRailAndPanel(
                                     onResetBackground = onResetBackground,
                                     onAccentColorChange = onAccentColorChange,
                                     onOpenAccentColorPicker = onOpenAccentColorPicker,
-                                    selectedRenderer = selectedRenderer,
-                                    onRendererChange = onRendererChange,
+                                    selectedRendererDescriptor = selectedRendererDescriptor,
+                                    availableRenderers = availableRenderers,
+                                    onRendererSelect = onRendererSelect,
+                                    onImportPlugin = onImportPlugin,
+                                    onDeletePlugin = onDeletePlugin,
                                     resolutionScale = resolutionScale,
                                     onResolutionScaleChange = onResolutionScaleChange,
-                                    requestMaxRefreshRate = requestMaxRefreshRate,
-                                    onRequestMaxRefreshRateChange = onRequestMaxRefreshRateChange,
-                                    useSystemVulkanDriver = useSystemVulkanDriver,
-                                    onUseSystemVulkanDriverChange = onUseSystemVulkanDriverChange,
-                                    useSurfaceViewRendering = useSurfaceViewRendering,
-                                    onUseSurfaceViewRenderingChange = onUseSurfaceViewRenderingChange,
                                 )
                             }
                         }
@@ -5857,16 +5918,13 @@ private fun SettingsPanelContent(
     onResetBackground: () -> Unit,
     onAccentColorChange: (Color) -> Unit,
     onOpenAccentColorPicker: () -> Unit,
-    selectedRenderer: RendererType,
-    onRendererChange: (RendererType) -> Unit,
+    selectedRendererDescriptor: RendererDescriptor,
+    availableRenderers: List<RendererDescriptor>,
+    onRendererSelect: (RendererDescriptor) -> Unit,
+    onImportPlugin: () -> Unit = {},
+    onDeletePlugin: (RendererDescriptor) -> Unit = {},
     resolutionScale: Int,
     onResolutionScaleChange: (Int) -> Unit,
-    requestMaxRefreshRate: Boolean,
-    onRequestMaxRefreshRateChange: (Boolean) -> Unit,
-    useSystemVulkanDriver: Boolean,
-    onUseSystemVulkanDriverChange: (Boolean) -> Unit,
-    useSurfaceViewRendering: Boolean,
-    onUseSurfaceViewRenderingChange: (Boolean) -> Unit,
 ) {
     val colors = LauncherTheme.colors
     var selectedCategory by remember { mutableStateOf(SettingsCategory.DISPLAY_AND_RENDERER) }
@@ -5984,16 +6042,13 @@ private fun SettingsPanelContent(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     DisplayAndRendererSettingsContent(
-                        selectedRenderer = selectedRenderer,
-                        onRendererChange = onRendererChange,
+                        selectedRendererDescriptor = selectedRendererDescriptor,
+                        availableRenderers = availableRenderers,
+                        onRendererSelect = onRendererSelect,
+                        onImportPlugin = onImportPlugin,
+                        onDeletePlugin = onDeletePlugin,
                         resolutionScale = resolutionScale,
                         onResolutionScaleChange = onResolutionScaleChange,
-                        requestMaxRefreshRate = requestMaxRefreshRate,
-                        onRequestMaxRefreshRateChange = onRequestMaxRefreshRateChange,
-                        useSystemVulkanDriver = useSystemVulkanDriver,
-                        onUseSystemVulkanDriverChange = onUseSystemVulkanDriverChange,
-                        useSurfaceViewRendering = useSurfaceViewRendering,
-                        onUseSurfaceViewRenderingChange = onUseSurfaceViewRenderingChange,
                     )
                 }
             }
@@ -6162,16 +6217,13 @@ private fun AppearanceSelectorResetRow(
 
 @Composable
 private fun DisplayAndRendererSettingsContent(
-    selectedRenderer: RendererType,
-    onRendererChange: (RendererType) -> Unit,
+    selectedRendererDescriptor: RendererDescriptor,
+    availableRenderers: List<RendererDescriptor>,
+    onRendererSelect: (RendererDescriptor) -> Unit,
+    onImportPlugin: () -> Unit = {},
+    onDeletePlugin: (RendererDescriptor) -> Unit = {},
     resolutionScale: Int,
     onResolutionScaleChange: (Int) -> Unit,
-    requestMaxRefreshRate: Boolean,
-    onRequestMaxRefreshRateChange: (Boolean) -> Unit,
-    useSystemVulkanDriver: Boolean,
-    onUseSystemVulkanDriverChange: (Boolean) -> Unit,
-    useSurfaceViewRendering: Boolean,
-    onUseSurfaceViewRenderingChange: (Boolean) -> Unit,
 ) {
     val colors = LauncherTheme.colors
     var isRendererDropdownOpen by remember { mutableStateOf(false) }
@@ -6245,7 +6297,7 @@ private fun DisplayAndRendererSettingsContent(
                                 fontWeight = FontWeight.SemiBold,
                             ),
                         ) {
-                            append(selectedRenderer.displayName)
+                            append(selectedRendererDescriptor.displayName)
                         }
                     },
                     style = MaterialTheme.typography.bodyMedium.copy(
@@ -6289,13 +6341,13 @@ private fun DisplayAndRendererSettingsContent(
 
                 Spacer(modifier = Modifier.height(2.dp))
 
-                RendererType.entries.forEach { renderer ->
-                    val isSelected = renderer == selectedRenderer
+                availableRenderers.forEach { descriptor ->
+                    val isSelected = descriptor.id == selectedRendererDescriptor.id
                     val optionShape = RoundedCornerShape(8.dp)
                     val optionBg by animateColorAsState(
                         targetValue = if (isSelected) colors.surfaceCardSelected else colors.transparent,
                         animationSpec = tween(durationMillis = 180),
-                        label = "rendererOptionBg_${renderer.id}",
+                        label = "rendererOptionBg_${descriptor.id}",
                     )
 
                     Row(
@@ -6304,25 +6356,109 @@ private fun DisplayAndRendererSettingsContent(
                             .smoothPressClickable(
                                 pressScale = 0.98f,
                                 onClick = {
-                                    onRendererChange(renderer)
+                                    onRendererSelect(descriptor)
                                     isRendererDropdownOpen = false
                                 },
                             )
                             .clip(optionShape)
                             .background(optionBg)
-                            .padding(horizontal = 10.dp, vertical = 9.dp),
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
-                        Text(
-                            text = renderer.displayName,
-                            color = if (isSelected) colors.accent else colors.textPrimary,
-                            style = MaterialTheme.typography.bodyLarge.copy(
-                                fontSize = 13.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                            ),
-                        )
+                        Row(
+                            modifier = Modifier.weight(1f, fill = false),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(
+                                text = descriptor.displayName,
+                                color = if (isSelected) colors.accent else colors.textPrimary,
+                                style = MaterialTheme.typography.bodyLarge.copy(
+                                    fontSize = 13.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+
+                            if (descriptor.isPlugin) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(colors.accent.copy(alpha = 0.18f))
+                                        .padding(horizontal = 5.dp, vertical = 2.dp),
+                                ) {
+                                    Text(
+                                        text = stringResource(R.string.settings_plugin_badge),
+                                        color = colors.accent,
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                        ),
+                                    )
+                                }
+                            }
+                        }
+
+                        // For imported plugins (not installed APK packages), provide a delete action button
+                        if (descriptor.isPlugin && descriptor.pluginInfo?.isInstalledApp == false) {
+                            val actionShape = RoundedCornerShape(6.dp)
+                            Box(
+                                modifier = Modifier
+                                    .smoothPressClickable(
+                                        pressScale = 0.95f,
+                                        onClick = {
+                                            onDeletePlugin(descriptor)
+                                        },
+                                    )
+                                    .clip(actionShape)
+                                    .background(colors.errorCancelContainer)
+                                    .border(1.dp, colors.errorBorder, actionShape)
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.action_remove),
+                                    color = colors.errorText,
+                                    style = MaterialTheme.typography.labelMedium.copy(
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                    ),
+                                )
+                            }
+                        }
                     }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // "+ Import Renderer Plugin (.apk / .aar)" action button
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .smoothPressClickable(
+                            pressScale = 0.98f,
+                            onClick = {
+                                isRendererDropdownOpen = false
+                                onImportPlugin()
+                            },
+                        )
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(colors.surfaceButton)
+                        .border(1.dp, colors.borderButton, RoundedCornerShape(10.dp))
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                    Text(
+                        text = stringResource(R.string.settings_import_renderer_plugin),
+                        color = colors.accent,
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                        ),
+                    )
                 }
             }
         }
@@ -6377,102 +6513,18 @@ private fun DisplayAndRendererSettingsContent(
             modifier = Modifier.fillMaxWidth(),
         )
     }
-
-    // 3. Display options: refresh rate / Vulkan driver / game surface mode
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(cardShape)
-            .background(colors.surfaceCard)
-            .border(1.dp, colors.borderDefault, cardShape)
-            .padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Text(
-            text = stringResource(R.string.settings_display_options_title),
-            color = colors.textPrimary,
-            style = MaterialTheme.typography.titleSmall.copy(
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
-            ),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        DisplayToggleRow(
-            title = stringResource(R.string.settings_max_refresh_rate_title),
-            description = stringResource(R.string.settings_max_refresh_rate_description),
-            checked = requestMaxRefreshRate,
-            onCheckedChange = onRequestMaxRefreshRateChange,
-            colors = colors,
-        )
-        DisplayToggleRow(
-            title = stringResource(R.string.settings_system_vulkan_title),
-            description = stringResource(R.string.settings_system_vulkan_description),
-            checked = useSystemVulkanDriver,
-            onCheckedChange = onUseSystemVulkanDriverChange,
-            colors = colors,
-        )
-        DisplayToggleRow(
-            title = stringResource(R.string.settings_surface_view_title),
-            description = stringResource(R.string.settings_surface_view_description),
-            checked = useSurfaceViewRendering,
-            onCheckedChange = onUseSurfaceViewRenderingChange,
-            colors = colors,
-        )
-    }
 }
 
-@Composable
-private fun DisplayToggleRow(
-    title: String,
-    description: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-    colors: LauncherColors,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .smoothPressClickable(
-                pressScale = 0.98f,
-                onClick = { onCheckedChange(!checked) },
-            )
-            .padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            Text(
-                text = title,
-                color = colors.textPrimary,
-                style = MaterialTheme.typography.bodyMedium.copy(
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                ),
-            )
-            Text(
-                text = description,
-                color = colors.textSubtle,
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontSize = 10.sp,
-                    lineHeight = 13.sp,
-                ),
-            )
+private fun queryOpenableDisplayName(resolver: ContentResolver, uri: Uri): String? {
+    runCatching {
+        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (idx >= 0) return cursor.getString(idx)
+            }
         }
-        Switch(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = colors.accent,
-                checkedTrackColor = colors.accent.copy(alpha = 0.55f),
-                uncheckedThumbColor = colors.textSecondary,
-                uncheckedTrackColor = colors.surfaceButton,
-            ),
-        )
     }
+    return uri.lastPathSegment
 }
 
 @Composable

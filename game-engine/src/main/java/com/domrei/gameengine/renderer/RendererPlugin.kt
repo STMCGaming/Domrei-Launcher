@@ -321,24 +321,46 @@ data class PluginConfigData(
                 json.optString("glPath").ifBlank {
                     json.optString("rendererPath").ifBlank { "libGL.so" }
                 }
-            }.substringAfterLast('/')
+            }.substringAfterLast('/').substringAfterLast('|')
 
             val eglPath = json.optString("rendererEGLPath").ifBlank {
                 json.optString("eglPath").ifBlank { "libEGL.so" }
-            }.substringAfterLast('/')
+            }.substringAfterLast('/').substringAfterLast('|')
 
             val dlopenLibs = mutableListOf<String>()
             val dlopenArr = json.optJSONArray("dlopenLibPaths") ?: json.optJSONArray("dlopenLibs")
             if (dlopenArr != null) {
                 for (i in 0 until dlopenArr.length()) {
-                    val lib = dlopenArr.optString(i).trim()
+                    val lib = dlopenArr.optString(i).trim().substringAfterLast('/').substringAfterLast('|')
                     if (lib.isNotBlank()) {
-                        dlopenLibs.add(lib.substringAfterLast('/'))
+                        dlopenLibs.add(lib)
                     }
                 }
             }
 
             val envMap = linkedMapOf<String, String>()
+
+            val parsedSelectables = mutableListOf<SelectableConfigItem>()
+            val parsedToggleables = mutableListOf<ToggleableConfigItem>()
+
+            fun resolveTitle(rawTitle: Any?, fallbackKey: String): String {
+                val titleStr = when (rawTitle) {
+                    is JSONObject -> rawTitle.optString("resName").ifBlank { rawTitle.optString("name").ifBlank { rawTitle.optString("key") } }
+                    is String -> rawTitle
+                    else -> null
+                }
+                if (titleStr.isNullOrBlank()) {
+                    return fallbackKey.removePrefix("title_").removePrefix("MOBILEGL_").removePrefix("LIBGL_")
+                        .split('_').filter { it.isNotBlank() }
+                        .joinToString(" ") { it.lowercase().replaceFirstChar { c -> c.uppercase() } }
+                }
+                var clean = titleStr.removePrefix("@string/").removePrefix("title_").trim()
+                if ('_' in clean) {
+                    return clean.split('_').filter { it.isNotBlank() }
+                        .joinToString(" ") { it.lowercase().replaceFirstChar { c -> c.uppercase() } }
+                }
+                return clean
+            }
 
             fun parseEnvList(arr: JSONArray) {
                 for (i in 0 until arr.length()) {
@@ -346,7 +368,43 @@ data class PluginConfigData(
                     if (item is JSONObject) {
                         val key = item.optString("name").ifBlank { item.optString("key") }
                         val value = item.optString("value")
-                        if (key.isNotBlank()) {
+                        val itemsArr = item.optJSONArray("items") ?: item.optJSONArray("values")
+                        val hasItems = itemsArr != null && itemsArr.length() > 0
+                        val isSelectable = hasItems || item.optString("type") == "selectable"
+                        val isToggleable = item.has("toggle") || item.optString("type") == "toggleable" ||
+                            (item.has("check") && !hasItems && item.has("value"))
+
+                        if (isSelectable && key.isNotBlank()) {
+                            val options = mutableListOf<String>()
+                            if (itemsArr != null) {
+                                for (j in 0 until itemsArr.length()) {
+                                    val optVal = itemsArr.optString(j)
+                                    if (optVal.isNotBlank()) options.add(optVal)
+                                }
+                            }
+                            val defaultVal = item.optString("defaultValue").ifBlank { options.firstOrNull().orEmpty() }
+                            parsedSelectables.add(
+                                SelectableConfigItem(
+                                    key = key,
+                                    title = resolveTitle(item.opt("title"), key),
+                                    options = options,
+                                    defaultValue = defaultVal
+                                )
+                            )
+                        } else if (isToggleable && key.isNotBlank()) {
+                            val togVal = value.ifBlank { "1" }
+                            val toggle = item.optBoolean("toggle", item.optBoolean("check", item.optBoolean("default", false)))
+                            val desc = item.optString("description").takeIf { it.isNotBlank() }
+                            parsedToggleables.add(
+                                ToggleableConfigItem(
+                                    key = key,
+                                    title = resolveTitle(item.opt("title"), key),
+                                    value = togVal,
+                                    defaultEnabled = toggle,
+                                    description = desc
+                                )
+                            )
+                        } else if (key.isNotBlank()) {
                             envMap[key] = value
                         }
                     } else if (item is String && '=' in item) {
@@ -476,16 +534,13 @@ data class PluginConfigData(
                 }
             }
 
-            val parsedSelectables = mutableListOf<SelectableConfigItem>()
-            val parsedToggleables = mutableListOf<ToggleableConfigItem>()
-
             val selectableArr = json.optJSONObject("env")?.optJSONArray("selectable")
                 ?: json.optJSONArray("selectable")
             if (selectableArr != null) {
                 for (i in 0 until selectableArr.length()) {
                     val selObj = selectableArr.optJSONObject(i) ?: continue
                     val key = selObj.optString("key").ifBlank { selObj.optString("name") }
-                    val title = selObj.optString("title").ifBlank { key }
+                    val title = resolveTitle(selObj.opt("title"), key)
                     val itemsArr = selObj.optJSONArray("items")
                         ?: selObj.optJSONArray("values")
                         ?: selObj.optJSONObject("items")?.optJSONArray("values")
@@ -497,7 +552,7 @@ data class PluginConfigData(
                         }
                     }
                     val defaultVal = selObj.optString("defaultValue").ifBlank { options.firstOrNull().orEmpty() }
-                    if (key.isNotBlank() && options.isNotEmpty()) {
+                    if (key.isNotBlank() && options.isNotEmpty() && parsedSelectables.none { it.key == key }) {
                         parsedSelectables.add(
                             SelectableConfigItem(
                                 key = key,
@@ -516,11 +571,11 @@ data class PluginConfigData(
                 for (i in 0 until toggleableArr.length()) {
                     val togObj = toggleableArr.optJSONObject(i) ?: continue
                     val key = togObj.optString("key").ifBlank { togObj.optString("name") }
-                    val title = togObj.optString("title").ifBlank { key }
+                    val title = resolveTitle(togObj.opt("title"), key)
                     val value = togObj.optString("value").ifBlank { "1" }
-                    val toggle = togObj.optBoolean("toggle", togObj.optBoolean("default", false))
+                    val toggle = togObj.optBoolean("toggle", togObj.optBoolean("check", togObj.optBoolean("default", false)))
                     val desc = togObj.optString("description").takeIf { it.isNotBlank() }
-                    if (key.isNotBlank()) {
+                    if (key.isNotBlank() && parsedToggleables.none { it.key == key }) {
                         parsedToggleables.add(
                             ToggleableConfigItem(
                                 key = key,
@@ -534,8 +589,16 @@ data class PluginConfigData(
                 }
             }
 
+            val isMobileGl = rawId.contains("mobilegl", ignoreCase = true) ||
+                rawName.contains("mobilegl", ignoreCase = true) ||
+                rawName.contains("mobile gl", ignoreCase = true) ||
+                rawId.contains("mobileglues", ignoreCase = true) ||
+                rawName.contains("mobileglues", ignoreCase = true)
+
             val finalSpec = if (parsedSelectables.isNotEmpty() || parsedToggleables.isNotEmpty()) {
                 RendererConfigSpec(selectables = parsedSelectables, toggleables = parsedToggleables)
+            } else if (isMobileGl) {
+                RendererConfigSpec.createMobileGlSpec()
             } else {
                 RendererConfigSpec()
             }

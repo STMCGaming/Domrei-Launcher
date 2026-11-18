@@ -79,8 +79,29 @@ class RendererManager(
 
     fun getRendererConfigSpec(descriptor: RendererDescriptor): RendererConfigSpec {
         if (descriptor.isPlugin && descriptor.pluginInfo != null) {
-            return descriptor.pluginInfo.configSpec
+            val plugin = descriptor.pluginInfo
+            if (plugin.configSpec.isNotEmpty) {
+                return plugin.configSpec
+            }
+            val isMobileGl = plugin.id.contains("mobilegl", ignoreCase = true) ||
+                plugin.displayName.contains("mobilegl", ignoreCase = true) ||
+                plugin.displayName.contains("mobile gl", ignoreCase = true) ||
+                plugin.displayName.contains("mobileglues", ignoreCase = true) ||
+                plugin.id.contains("mobileglues", ignoreCase = true)
+            if (isMobileGl) {
+                return RendererConfigSpec.createMobileGlSpec()
+            }
+            return RendererConfigSpec()
         }
+
+        val isMobileGl = descriptor.id.contains("mobilegl", ignoreCase = true) ||
+            descriptor.displayName.contains("mobilegl", ignoreCase = true) ||
+            descriptor.displayName.contains("mobile gl", ignoreCase = true) ||
+            descriptor.builtInType == RendererType.MOBILE_GLUES
+        if (isMobileGl) {
+            return RendererConfigSpec.createMobileGlSpec()
+        }
+
         return RendererConfigSpec()
     }
 
@@ -360,7 +381,10 @@ class RendererManager(
             val hasV1 = metaData.containsKey("fclPlugin")
             val hasBackendTitle = metaData.containsKey("title_backend_type")
             val isRendererPkg = appInfo.packageName.contains("renderer", ignoreCase = true) ||
-                appInfo.packageName.contains("fcl", ignoreCase = true)
+                appInfo.packageName.contains("fcl", ignoreCase = true) ||
+                appInfo.packageName.contains("mobilegl", ignoreCase = true) ||
+                appInfo.packageName.contains("mobileglues", ignoreCase = true) ||
+                appInfo.packageName.contains("driver", ignoreCase = true)
 
             if (hasV2 || hasV1 || hasBackendTitle || isRendererPkg) {
                 var config: PluginConfigData? = null

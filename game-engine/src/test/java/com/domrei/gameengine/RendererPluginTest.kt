@@ -264,16 +264,19 @@ class RendererPluginTest {
         assertEquals(1, available.size)
         assertEquals(RendererType.KRYPTON_WRAPPER.id, available.first().id)
 
-        // Krypton Wrapper and MobileGlues have NO renderer configuration spec
+        // Krypton Wrapper has NO renderer configuration spec
         val kryptonDesc = RendererDescriptor.fromBuiltIn(RendererType.KRYPTON_WRAPPER)
         val kryptonSpec = manager.getRendererConfigSpec(kryptonDesc)
         assertTrue(kryptonSpec.isEmpty)
         assertFalse(kryptonSpec.isNotEmpty)
 
-        val mgDesc = RendererDescriptor.fromBuiltIn(RendererType.MOBILE_GLUES)
+        // MobileGL plugin has renderer configuration spec (backend selection + switches)
+        val mgDesc = RendererDescriptor(id = "plugin:mobilegl", displayName = "MobileGL", isPlugin = true)
         val mgSpec = manager.getRendererConfigSpec(mgDesc)
-        assertTrue(mgSpec.isEmpty)
-        assertFalse(mgSpec.isNotEmpty)
+        assertTrue(mgSpec.isNotEmpty)
+        assertFalse(mgSpec.isEmpty)
+        assertTrue(mgSpec.selectables.any { it.key == "MOBILEGL_BACKEND_TYPE" })
+        assertTrue(mgSpec.toggleables.any { it.key == "MOBILEGL_USE_ANGLE" })
 
         // Plugin with explicit config spec (switches and dropdown selection)
         val dummyLibDir = File(tempRoot, "plugin_libs").apply { mkdirs() }
@@ -324,5 +327,59 @@ class RendererPluginTest {
         val plainSpec = manager.getRendererConfigSpec(plainDesc)
         assertTrue(plainSpec.isEmpty)
         assertFalse(plainSpec.isNotEmpty)
+    }
+
+    @Test
+    fun `PluginConfigData correctly parses ZalithLauncher2 buildEnvs array with selectables and toggleables`() {
+        val zalithJson = """
+            {
+                "displayName": "Zalith Custom Renderer",
+                "rendererId": "zalith_custom",
+                "rendererGLPath": "**|libGL.so",
+                "rendererEGLPath": "**|libEGL.so",
+                "env": [
+                    {
+                        "key": "LIB_MESA_NAME",
+                        "value": "**|libMesa.so"
+                    },
+                    {
+                        "key": "GL_VERSION",
+                        "items": ["3.0", "3.1", "3.2"],
+                        "title": "title_gl_version",
+                        "defaultValue": "3.1"
+                    },
+                    {
+                        "key": "ENABLE_FAST_MATH",
+                        "value": "1",
+                        "toggle": true,
+                        "title": { "resName": "title_enable_fast_math" },
+                        "description": "Enables aggressive math optimizations"
+                    }
+                ]
+            }
+        """.trimIndent()
+
+        val parsed = PluginConfigData.parse(zalithJson, fallbackId = "zalith_custom", fallbackName = "Zalith Custom")
+        assertEquals("zalith_custom", parsed.id)
+        assertEquals("Zalith Custom Renderer", parsed.displayName)
+        assertEquals("libGL.so", parsed.glLibFileName)
+        assertEquals("libEGL.so", parsed.eglLibFileName)
+        assertEquals("**|libMesa.so", parsed.environment["LIB_MESA_NAME"])
+
+        assertTrue(parsed.configSpec.isNotEmpty)
+        assertEquals(1, parsed.configSpec.selectables.size)
+        val sel = parsed.configSpec.selectables[0]
+        assertEquals("GL_VERSION", sel.key)
+        assertEquals("Gl Version", sel.title)
+        assertEquals(listOf("3.0", "3.1", "3.2"), sel.options)
+        assertEquals("3.1", sel.defaultValue)
+
+        assertEquals(1, parsed.configSpec.toggleables.size)
+        val tog = parsed.configSpec.toggleables[0]
+        assertEquals("ENABLE_FAST_MATH", tog.key)
+        assertEquals("Enable Fast Math", tog.title)
+        assertEquals("1", tog.value)
+        assertEquals(true, tog.defaultEnabled)
+        assertEquals("Enables aggressive math optimizations", tog.description)
     }
 }

@@ -159,7 +159,7 @@ class RendererPluginTest {
         assertTrue(deleted)
         val afterDelete = manager.getAvailableRenderers()
         assertFalse(afterDelete.any { it.id == "plugin:virgl" })
-        assertEquals(RendererType.MOBILE_GLUES.displayName, manager.getSelectedRendererDisplayName())
+        assertEquals(RendererType.KRYPTON_WRAPPER.displayName, manager.getSelectedRendererDisplayName())
     }
 
     @Test
@@ -207,29 +207,22 @@ class RendererPluginTest {
     }
 
     @Test
-    fun `RendererManager provides and applies MobileGL configurations`() = runBlocking {
-        val tempRoot = Files.createTempDirectory("mobilegl_config_test").toFile()
+    fun `RendererManager provides and applies custom plugin configurations`() = runBlocking {
+        val tempRoot = Files.createTempDirectory("plugin_config_test").toFile()
         val externalDir = File(tempRoot, "renderers").apply { mkdirs() }
         val manager = RendererManager(
             externalRenderersDir = externalDir,
             appContext = null
         )
 
+        // Built-in renderers (Krypton and MobileGlues) have no extra renderer configurations
+        val kryptonDesc = RendererDescriptor.fromBuiltIn(RendererType.KRYPTON_WRAPPER)
+        assertTrue(manager.getAvailableRendererConfigs(kryptonDesc).isEmpty())
+
         val mgDesc = RendererDescriptor.fromBuiltIn(RendererType.MOBILE_GLUES)
-        val configs = manager.getAvailableRendererConfigs(mgDesc)
-        assertTrue(configs.any { it.id == "direct_gles" })
-        assertTrue(configs.any { it.id == "direct_gles_angle" })
-        assertTrue(configs.any { it.id == "direct_vulkan" })
+        assertTrue(manager.getAvailableRendererConfigs(mgDesc).isEmpty())
 
-        // Select ANGLE config
-        val angleConfig = configs.first { it.id == "direct_gles_angle" }
-        manager.setSelectedRendererConfig(mgDesc, angleConfig)
-
-        val selected = manager.getSelectedRendererConfig(mgDesc)
-        assertEquals("direct_gles_angle", selected.id)
-        assertEquals("1", selected.environment["MOBILEGL_USE_ANGLE"])
-
-        // Also test plugin with custom configurations
+        // Test plugin with custom configurations
         val customConfigs = listOf(
             RendererConfigOption(id = "fast", displayName = "Fast Mode", environment = mapOf("FAST_GL" to "1")),
             RendererConfigOption(id = "fancy", displayName = "Fancy Mode", environment = mapOf("FANCY_GL" to "1"))
@@ -258,7 +251,7 @@ class RendererPluginTest {
     }
 
     @Test
-    fun `RendererConfigSpec and state manage switches and dropdown selections like ZalithLauncher2`() = runBlocking {
+    fun `RendererConfigSpec is empty for krypton and mobileglues, active only for plugins declaring spec`() = runBlocking {
         val tempRoot = Files.createTempDirectory("spec_state_test").toFile()
         val externalDir = File(tempRoot, "renderers").apply { mkdirs() }
         val manager = RendererManager(
@@ -266,15 +259,40 @@ class RendererPluginTest {
             appContext = null
         )
 
-        // Built-in MobileGlues has spec with both selectables and toggleables
+        // Verify available renderers only contain Krypton Wrapper as built-in (no built-in MobileGlues)
+        val available = manager.getAvailableRenderers()
+        assertEquals(1, available.size)
+        assertEquals(RendererType.KRYPTON_WRAPPER.id, available.first().id)
+
+        // Krypton Wrapper and MobileGlues have NO renderer configuration spec
+        val kryptonDesc = RendererDescriptor.fromBuiltIn(RendererType.KRYPTON_WRAPPER)
+        val kryptonSpec = manager.getRendererConfigSpec(kryptonDesc)
+        assertTrue(kryptonSpec.isEmpty)
+        assertFalse(kryptonSpec.isNotEmpty)
+
         val mgDesc = RendererDescriptor.fromBuiltIn(RendererType.MOBILE_GLUES)
         val mgSpec = manager.getRendererConfigSpec(mgDesc)
-        assertTrue(mgSpec.isNotEmpty)
-        assertTrue(mgSpec.selectables.any { it.key == "MOBILEGL_BACKEND_TYPE" })
-        assertTrue(mgSpec.toggleables.any { it.key == "MOBILEGL_USE_ANGLE" })
+        assertTrue(mgSpec.isEmpty)
+        assertFalse(mgSpec.isNotEmpty)
 
-        // Check initial default state
-        val initialState = manager.getRendererConfigState(mgDesc)
+        // Plugin with explicit config spec (switches and dropdown selection)
+        val dummyLibDir = File(tempRoot, "plugin_libs").apply { mkdirs() }
+        val dummyGl = File(dummyLibDir, "libGL.so").apply { writeText("gl") }
+        val pluginWithSpec = RendererPlugin(
+            id = "mobilegl_app_plugin",
+            displayName = "MobileGL Plugin",
+            nativeLibDir = dummyLibDir,
+            primaryLibFile = dummyGl,
+            configSpec = RendererConfigSpec.createMobileGlSpec()
+        )
+        val pluginDesc = RendererDescriptor.fromPlugin(pluginWithSpec)
+        val pluginSpec = manager.getRendererConfigSpec(pluginDesc)
+        assertTrue(pluginSpec.isNotEmpty)
+        assertTrue(pluginSpec.selectables.any { it.key == "MOBILEGL_BACKEND_TYPE" })
+        assertTrue(pluginSpec.toggleables.any { it.key == "MOBILEGL_USE_ANGLE" })
+
+        // Check initial default state for this plugin
+        val initialState = manager.getRendererConfigState(pluginDesc)
         assertEquals("DirectGLES", initialState.selectedValues["MOBILEGL_BACKEND_TYPE"])
         assertEquals(false, initialState.toggledKeys["MOBILEGL_USE_ANGLE"])
 
@@ -283,14 +301,14 @@ class RendererPluginTest {
             selectedValues = mapOf("MOBILEGL_BACKEND_TYPE" to "DirectVulkan"),
             toggledKeys = initialState.toggledKeys + ("MOBILEGL_USE_ANGLE" to true)
         )
-        manager.saveRendererConfigState(mgDesc, modifiedState)
+        manager.saveRendererConfigState(pluginDesc, modifiedState)
 
-        val retrievedState = manager.getRendererConfigState(mgDesc)
+        val retrievedState = manager.getRendererConfigState(pluginDesc)
         assertEquals("DirectVulkan", retrievedState.selectedValues["MOBILEGL_BACKEND_TYPE"])
         assertEquals(true, retrievedState.toggledKeys["MOBILEGL_USE_ANGLE"])
 
         // Effective environment includes both
-        val env = manager.getEffectiveEnvironment(mgDesc, retrievedState)
+        val env = manager.getEffectiveEnvironment(pluginDesc, retrievedState)
         assertEquals("DirectVulkan", env["MOBILEGL_BACKEND_TYPE"])
         assertEquals("1", env["MOBILEGL_USE_ANGLE"])
         assertEquals("1", env["MG_ENABLE_ANGLE"])

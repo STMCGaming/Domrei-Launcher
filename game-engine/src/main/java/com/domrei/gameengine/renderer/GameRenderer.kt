@@ -52,7 +52,7 @@ enum class RendererType(
             if (id != null && (id.startsWith("plugin:") || id.startsWith("custom_plugin"))) {
                 return CUSTOM_PLUGIN
             }
-            return entries.firstOrNull { it.id.equals(id, ignoreCase = true) } ?: MOBILE_GLUES
+            return entries.firstOrNull { it.id.equals(id, ignoreCase = true) } ?: KRYPTON_WRAPPER
         }
     }
 }

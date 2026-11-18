@@ -534,20 +534,10 @@ data class PluginConfigData(
                 }
             }
 
-            val isMobileGl = rawId.contains("mobilegl", ignoreCase = true) ||
-                rawName.contains("mobilegl", ignoreCase = true) ||
-                rawName.contains("mobile gl", ignoreCase = true)
-
             val finalSpec = if (parsedSelectables.isNotEmpty() || parsedToggleables.isNotEmpty()) {
                 RendererConfigSpec(selectables = parsedSelectables, toggleables = parsedToggleables)
-            } else if (isMobileGl) {
-                RendererConfigSpec.createMobileGlSpec()
             } else {
                 RendererConfigSpec()
-            }
-
-            if (parsedConfigs.isEmpty() && isMobileGl) {
-                parsedConfigs.addAll(RendererConfigOption.createMobileGlPresets())
             }
 
             return PluginConfigData(

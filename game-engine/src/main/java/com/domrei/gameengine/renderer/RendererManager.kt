@@ -54,7 +54,7 @@ class RendererManager(
             if (preferenceFile.isFile) preferenceFile.readText().trim() else null
         }.getOrNull()
         if (savedId.isNullOrBlank()) {
-            return RendererDescriptor.fromBuiltIn(RendererType.MOBILE_GLUES)
+            return RendererDescriptor.fromBuiltIn(RendererType.KRYPTON_WRAPPER)
         }
         val all = getAvailableRenderers()
         return all.firstOrNull { it.id.equals(savedId, ignoreCase = true) }
@@ -79,24 +79,9 @@ class RendererManager(
 
     fun getRendererConfigSpec(descriptor: RendererDescriptor): RendererConfigSpec {
         if (descriptor.isPlugin && descriptor.pluginInfo != null) {
-            val plugin = descriptor.pluginInfo
-            if (plugin.configSpec.isNotEmpty) {
-                return plugin.configSpec
-            }
-            val isMobileGl = plugin.id.contains("mobilegl", ignoreCase = true) ||
-                plugin.displayName.contains("mobilegl", ignoreCase = true) ||
-                plugin.displayName.contains("mobile gl", ignoreCase = true)
-            if (isMobileGl) {
-                return RendererConfigSpec.createMobileGlSpec()
-            }
-            return RendererConfigSpec()
+            return descriptor.pluginInfo.configSpec
         }
-
-        return when (descriptor.builtInType) {
-            RendererType.MOBILE_GLUES -> RendererConfigSpec.createMobileGlSpec()
-            RendererType.KRYPTON_WRAPPER -> RendererConfigSpec.createKryptonSpec()
-            RendererType.CUSTOM_PLUGIN, null -> RendererConfigSpec()
-        }
+        return RendererConfigSpec()
     }
 
     private fun getConfigStateFileForRenderer(rendererId: String): File {
@@ -206,36 +191,9 @@ class RendererManager(
 
     fun getAvailableRendererConfigs(descriptor: RendererDescriptor): List<RendererConfigOption> {
         if (descriptor.isPlugin && descriptor.pluginInfo != null) {
-            val plugin = descriptor.pluginInfo
-            if (plugin.configurations.isNotEmpty()) {
-                return plugin.configurations
-            }
-            val isMobileGl = plugin.id.contains("mobilegl", ignoreCase = true) ||
-                plugin.displayName.contains("mobilegl", ignoreCase = true) ||
-                plugin.displayName.contains("mobile gl", ignoreCase = true)
-            if (isMobileGl) {
-                return RendererConfigOption.createMobileGlPresets()
-            }
-            return listOf(
-                RendererConfigOption(
-                    id = "default",
-                    displayName = "Default",
-                    description = "Default plugin configuration"
-                )
-            )
+            return descriptor.pluginInfo.configurations
         }
-
-        return when (descriptor.builtInType) {
-            RendererType.MOBILE_GLUES -> RendererConfigOption.createMobileGlPresets()
-            RendererType.KRYPTON_WRAPPER -> RendererConfigOption.createKryptonPresets()
-            RendererType.CUSTOM_PLUGIN, null -> listOf(
-                RendererConfigOption(
-                    id = "default",
-                    displayName = "Default",
-                    description = "Standard configuration"
-                )
-            )
-        }
+        return emptyList()
     }
 
     private fun getConfigFileForRenderer(rendererId: String): File {
@@ -264,7 +222,6 @@ class RendererManager(
 
     fun getAvailableRenderers(): List<RendererDescriptor> {
         val list = mutableListOf<RendererDescriptor>()
-        list.add(RendererDescriptor.fromBuiltIn(RendererType.MOBILE_GLUES))
         list.add(RendererDescriptor.fromBuiltIn(RendererType.KRYPTON_WRAPPER))
         val plugins = getInstalledPlugins()
         for (plugin in plugins) {
@@ -635,7 +592,7 @@ class RendererManager(
             if (preferenceFile.isFile) preferenceFile.readText().trim() else ""
         }.getOrDefault("")
         if (savedId.contains(safeId, ignoreCase = true)) {
-            setSelectedRenderer(RendererType.MOBILE_GLUES)
+            setSelectedRenderer(RendererType.KRYPTON_WRAPPER)
         }
         return deleted
     }
@@ -778,9 +735,7 @@ class RendererManager(
             displayName = fallbackName,
             glLibFileName = primaryGl,
             eglLibFileName = eglLib,
-            configurations = if (fallbackId.contains("mobilegl", ignoreCase = true)) {
-                RendererConfigOption.createMobileGlPresets()
-            } else emptyList()
+            configurations = emptyList()
         )
     }
 
@@ -851,7 +806,7 @@ class RendererManager(
                 )
             }
         }
-        val type = descriptor.builtInType ?: RendererType.MOBILE_GLUES
+        val type = descriptor.builtInType ?: RendererType.KRYPTON_WRAPPER
         return@withContext prepareRenderer(
             type = type,
             configOption = effectiveConfig,

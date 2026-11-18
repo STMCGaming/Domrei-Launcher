@@ -1,6 +1,5 @@
 package com.domrei.launcher
 
-import android.content.ContentResolver
 import android.graphics.Bitmap
 import android.graphics.Canvas as AndroidCanvas
 import android.graphics.Paint as AndroidPaint
@@ -8,7 +7,6 @@ import android.graphics.Rect as AndroidRect
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.provider.OpenableColumns
 import android.util.Log
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -382,7 +380,6 @@ sealed interface LauncherDialog {
     data class RenameAccount(val account: LauncherAccount) : LauncherDialog
     data class ConfirmRemoveAccount(val account: LauncherAccount) : LauncherDialog
     data class ConfirmRemoveInstance(val instance: LauncherInstance) : LauncherDialog
-    data class ConfirmDeletePlugin(val descriptor: RendererDescriptor) : LauncherDialog
     data object AddInstance : LauncherDialog
     data class PickAccentColor(val initialColor: Color) : LauncherDialog
 }
@@ -744,45 +741,10 @@ fun LauncherScreen(
         mediaPickerLauncher?.launch(arrayOf("image/*", "video/*"))
     }
 
-    val pluginPickerLauncher = if (!isInPreview) {
-        rememberLauncherForActivityResult(
-            contract = ActivityResultContracts.OpenDocument(),
-        ) { uri ->
-            if (uri != null) {
-                coroutineScope.launch(Dispatchers.IO) {
-                    runCatching {
-                        val fileName = queryOpenableDisplayName(context.contentResolver, uri) ?: "plugin.apk"
-                        context.contentResolver.openInputStream(uri)?.use { stream ->
-                            gameEngine.rendererManager.importPluginFromStream(stream, fileName)
-                        }?.getOrThrow()
-                    }.onSuccess { imported ->
-                        if (imported != null) {
-                            val desc = RendererDescriptor.fromPlugin(imported)
-                            gameEngine.rendererManager.setSelectedRenderer(desc)
-                            withContext(Dispatchers.Main) {
-                                availableRenderers = gameEngine.rendererManager.getAvailableRenderers()
-                                selectedRendererDescriptor = desc
-                                Toast.makeText(
-                                    context,
-                                    context.getString(R.string.settings_plugin_imported_success, imported.displayName),
-                                    Toast.LENGTH_SHORT,
-                                ).show()
-                            }
-                        }
-                    }.onFailure { error ->
-                        withContext(Dispatchers.Main) {
-                            Toast.makeText(
-                                context,
-                                context.getString(R.string.settings_plugin_import_failed, error.message ?: "Unknown error"),
-                                Toast.LENGTH_LONG,
-                            ).show()
-                        }
-                    }
-                }
-            }
+    LaunchedEffect(currentDestination) {
+        if (currentDestination == LauncherDestination.SETTINGS) {
+            availableRenderers = gameEngine.rendererManager.getAvailableRenderers()
         }
-    } else {
-        null
     }
 
     val soundPlayer = remember(context, isInPreview) {
@@ -1283,12 +1245,6 @@ fun LauncherScreen(
                     gameEngine.rendererManager.setSelectedRenderer(newDescriptor)
                     selectedRendererDescriptor = newDescriptor
                 },
-                onImportPlugin = {
-                    pluginPickerLauncher?.launch(arrayOf("*/*"))
-                },
-                onDeletePlugin = { descriptor ->
-                    activeDialog = LauncherDialog.ConfirmDeletePlugin(descriptor)
-                },
                 resolutionScale = resolutionScale,
                 onResolutionScaleChange = { newScale ->
                     displayPrefs.saveResolutionScale(newScale)
@@ -1620,30 +1576,6 @@ fun LauncherScreen(
                             instances = remaining
                             if (selectedInstanceId == dialog.instance.id) {
                                 selectedInstanceId = remaining.firstOrNull()?.id.orEmpty()
-                            }
-                            activeDialog = null
-                        },
-                    )
-                }
-                is LauncherDialog.ConfirmDeletePlugin -> {
-                    LauncherConfirmDialogContent(
-                        title = stringResource(R.string.dialog_confirm_delete_plugin_title),
-                        message = stringResource(
-                            R.string.dialog_confirm_delete_plugin_message,
-                            dialog.descriptor.displayName,
-                        ),
-                        confirmText = stringResource(R.string.action_remove),
-                        onCancel = { activeDialog = null },
-                        onConfirm = {
-                            dialog.descriptor.pluginInfo?.let { plugin ->
-                                gameEngine.rendererManager.deletePlugin(plugin.id)
-                                availableRenderers = gameEngine.rendererManager.getAvailableRenderers()
-                                selectedRendererDescriptor = gameEngine.rendererManager.getSelectedRendererDescriptor()
-                                Toast.makeText(
-                                    context,
-                                    context.getString(R.string.settings_plugin_deleted, plugin.displayName),
-                                    Toast.LENGTH_SHORT,
-                                ).show()
                             }
                             activeDialog = null
                         },
@@ -4263,8 +4195,6 @@ fun UnifiedLeftRailAndPanel(
     selectedRendererDescriptor: RendererDescriptor,
     availableRenderers: List<RendererDescriptor>,
     onRendererSelect: (RendererDescriptor) -> Unit,
-    onImportPlugin: () -> Unit = {},
-    onDeletePlugin: (RendererDescriptor) -> Unit = {},
     resolutionScale: Int,
     onResolutionScaleChange: (Int) -> Unit,
     screenWidth: Dp,
@@ -4452,8 +4382,6 @@ fun UnifiedLeftRailAndPanel(
                                     selectedRendererDescriptor = selectedRendererDescriptor,
                                     availableRenderers = availableRenderers,
                                     onRendererSelect = onRendererSelect,
-                                    onImportPlugin = onImportPlugin,
-                                    onDeletePlugin = onDeletePlugin,
                                     resolutionScale = resolutionScale,
                                     onResolutionScaleChange = onResolutionScaleChange,
                                 )
@@ -5921,8 +5849,6 @@ private fun SettingsPanelContent(
     selectedRendererDescriptor: RendererDescriptor,
     availableRenderers: List<RendererDescriptor>,
     onRendererSelect: (RendererDescriptor) -> Unit,
-    onImportPlugin: () -> Unit = {},
-    onDeletePlugin: (RendererDescriptor) -> Unit = {},
     resolutionScale: Int,
     onResolutionScaleChange: (Int) -> Unit,
 ) {
@@ -6045,8 +5971,6 @@ private fun SettingsPanelContent(
                         selectedRendererDescriptor = selectedRendererDescriptor,
                         availableRenderers = availableRenderers,
                         onRendererSelect = onRendererSelect,
-                        onImportPlugin = onImportPlugin,
-                        onDeletePlugin = onDeletePlugin,
                         resolutionScale = resolutionScale,
                         onResolutionScaleChange = onResolutionScaleChange,
                     )
@@ -6220,8 +6144,6 @@ private fun DisplayAndRendererSettingsContent(
     selectedRendererDescriptor: RendererDescriptor,
     availableRenderers: List<RendererDescriptor>,
     onRendererSelect: (RendererDescriptor) -> Unit,
-    onImportPlugin: () -> Unit = {},
-    onDeletePlugin: (RendererDescriptor) -> Unit = {},
     resolutionScale: Int,
     onResolutionScaleChange: (Int) -> Unit,
 ) {
@@ -6400,65 +6322,7 @@ private fun DisplayAndRendererSettingsContent(
                                 }
                             }
                         }
-
-                        // For imported plugins (not installed APK packages), provide a delete action button
-                        if (descriptor.isPlugin && descriptor.pluginInfo?.isInstalledApp == false) {
-                            val actionShape = RoundedCornerShape(6.dp)
-                            Box(
-                                modifier = Modifier
-                                    .smoothPressClickable(
-                                        pressScale = 0.95f,
-                                        onClick = {
-                                            onDeletePlugin(descriptor)
-                                        },
-                                    )
-                                    .clip(actionShape)
-                                    .background(colors.errorCancelContainer)
-                                    .border(1.dp, colors.errorBorder, actionShape)
-                                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(
-                                    text = stringResource(R.string.action_remove),
-                                    color = colors.errorText,
-                                    style = MaterialTheme.typography.labelMedium.copy(
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                    ),
-                                )
-                            }
-                        }
                     }
-                }
-
-                Spacer(modifier = Modifier.height(4.dp))
-
-                // "+ Import Renderer Plugin (.apk / .aar)" action button
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .smoothPressClickable(
-                            pressScale = 0.98f,
-                            onClick = {
-                                isRendererDropdownOpen = false
-                                onImportPlugin()
-                            },
-                        )
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(colors.surfaceButton)
-                        .border(1.dp, colors.borderButton, RoundedCornerShape(10.dp))
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center,
-                ) {
-                    Text(
-                        text = stringResource(R.string.settings_import_renderer_plugin),
-                        color = colors.accent,
-                        style = MaterialTheme.typography.labelMedium.copy(
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                        ),
-                    )
                 }
             }
         }
@@ -6513,18 +6377,6 @@ private fun DisplayAndRendererSettingsContent(
             modifier = Modifier.fillMaxWidth(),
         )
     }
-}
-
-private fun queryOpenableDisplayName(resolver: ContentResolver, uri: Uri): String? {
-    runCatching {
-        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                if (idx >= 0) return cursor.getString(idx)
-            }
-        }
-    }
-    return uri.lastPathSegment
 }
 
 @Composable

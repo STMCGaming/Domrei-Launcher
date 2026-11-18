@@ -1,6 +1,8 @@
 package com.domrei.gameengine.renderer
 
 import android.content.Context
+import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import com.domrei.gameengine.runtime.RuntimeAbi
 import kotlinx.coroutines.CancellationException
@@ -174,23 +176,57 @@ class RendererManager(
         val context = appContext ?: return emptyList()
         val pm = context.packageManager
         val result = mutableListOf<RendererPlugin>()
+        val seenPackages = mutableSetOf<String>()
 
-        val installedPackages = runCatching {
-            pm.getInstalledPackages(PackageManager.GET_META_DATA)
-        }.getOrNull() ?: emptyList()
+        val candidateAppInfos = mutableListOf<ApplicationInfo>()
 
-        for (pkg in installedPackages) {
-            val appInfo = pkg.applicationInfo ?: continue
+        // 1. Query activities with ACTION_MAIN + CATEGORY_LAUNCHER (standard for plugin APKs)
+        val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        runCatching {
+            val resolveInfos = pm.queryIntentActivities(launcherIntent, PackageManager.GET_META_DATA)
+            for (info in resolveInfos) {
+                val pkgName = info.activityInfo?.packageName ?: continue
+                if (pkgName == context.packageName || !seenPackages.add(pkgName)) continue
+                val appInfo = info.activityInfo?.applicationInfo
+                    ?: runCatching { pm.getApplicationInfo(pkgName, PackageManager.GET_META_DATA) }.getOrNull()
+                if (appInfo != null) {
+                    candidateAppInfos.add(appInfo)
+                }
+            }
+        }
+
+        // 2. Also check getInstalledPackages for any packages without launcher activity
+        runCatching {
+            val installed = pm.getInstalledPackages(PackageManager.GET_META_DATA)
+            for (pkg in installed) {
+                val pkgName = pkg.packageName
+                if (pkgName == context.packageName || !seenPackages.add(pkgName)) continue
+                val appInfo = pkg.applicationInfo ?: continue
+                candidateAppInfos.add(appInfo)
+            }
+        }
+
+        for (rawAppInfo in candidateAppInfos) {
+            val appInfo = if (rawAppInfo.metaData == null) {
+                runCatching { pm.getApplicationInfo(rawAppInfo.packageName, PackageManager.GET_META_DATA) }.getOrNull() ?: rawAppInfo
+            } else {
+                rawAppInfo
+            }
             val metaData = appInfo.metaData ?: continue
 
             val hasV2 = metaData.containsKey("fclPlugin_V2")
             val hasV1 = metaData.containsKey("fclPlugin")
-            val isRendererPkg = pkg.packageName.contains("renderer", ignoreCase = true)
+            val hasBackendTitle = metaData.containsKey("title_backend_type")
+            val isRendererPkg = appInfo.packageName.contains("renderer", ignoreCase = true) ||
+                appInfo.packageName.contains("fcl", ignoreCase = true)
 
-            if (hasV2 || hasV1 || isRendererPkg) {
+            if (hasV2 || hasV1 || hasBackendTitle || isRendererPkg) {
                 var config: PluginConfigData? = null
+                val labelName = runCatching { appInfo.loadLabel(pm).toString() }.getOrNull().orEmpty()
+                val fallbackName = labelName.ifBlank { appInfo.packageName }
+
                 if (hasV2) {
-                    val resId = metaData.getInt("fclPlugin_V2")
+                    val resId = metaData.getInt("fclPlugin_V2", 0)
                     val jsonStr = runCatching {
                         if (resId != 0) {
                             pm.getResourcesForApplication(appInfo).getString(resId)
@@ -201,16 +237,73 @@ class RendererManager(
                     if (!jsonStr.isNullOrBlank()) {
                         config = PluginConfigData.parse(
                             jsonStr = jsonStr,
-                            fallbackId = pkg.packageName,
-                            fallbackName = appInfo.loadLabel(pm).toString()
+                            fallbackId = appInfo.packageName,
+                            fallbackName = fallbackName
                         )
                     }
                 }
 
-                val fallbackName = appInfo.loadLabel(pm).toString().ifBlank { pkg.packageName }
-                val fallbackId = pkg.packageName
+                // If V2 was not present or didn't yield a config, check legacy fclPlugin or title_backend_type
+                if (config == null && (hasV1 || hasBackendTitle)) {
+                    val titleResId = metaData.getInt("title_backend_type", 0)
+                    val backendTitle = runCatching {
+                        if (titleResId != 0) {
+                            pm.getResourcesForApplication(appInfo).getString(titleResId)
+                        } else {
+                            metaData.getString("title_backend_type")
+                        }
+                    }.getOrNull()?.takeIf { it.isNotBlank() } ?: fallbackName
+
+                    val glLib = metaData.getString("renderer")
+                        ?: metaData.getString("glPath")
+                        ?: "libGL.so"
+                    val eglLib = metaData.getString("eglPath") ?: "libEGL.so"
+
+                    val dlopenStr = metaData.getString("dlopenLibs")
+                    val dlopenLibs = if (!dlopenStr.isNullOrBlank()) {
+                        dlopenStr.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+                    } else {
+                        emptyList()
+                    }
+
+                    config = PluginConfigData(
+                        id = appInfo.packageName,
+                        displayName = backendTitle,
+                        glLibFileName = glLib,
+                        eglLibFileName = eglLib,
+                        dlopenLibPaths = dlopenLibs
+                    )
+                }
+
+                // Also check if config.json or fclPlugin.json is inside assets/ of the plugin APK
+                if (config == null) {
+                    val apkPath = appInfo.sourceDir ?: appInfo.publicSourceDir
+                    if (!apkPath.isNullOrBlank() && File(apkPath).isFile) {
+                        runCatching {
+                            ZipFile(File(apkPath)).use { zip ->
+                                val entry = zip.getEntry("assets/config.json")
+                                    ?: zip.getEntry("assets/renderer.json")
+                                    ?: zip.getEntry("assets/fclPlugin.json")
+                                    ?: zip.getEntry("config.json")
+                                if (entry != null) {
+                                    zip.getInputStream(entry).bufferedReader().use { reader ->
+                                        val text = reader.readText()
+                                        if (text.isNotBlank()) {
+                                            config = PluginConfigData.parse(
+                                                jsonStr = text,
+                                                fallbackId = appInfo.packageName,
+                                                fallbackName = fallbackName
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 val finalConfig = config ?: PluginConfigData(
-                    id = fallbackId,
+                    id = appInfo.packageName,
                     displayName = fallbackName,
                     glLibFileName = "libGL.so",
                     eglLibFileName = "libEGL.so"
@@ -230,7 +323,7 @@ class RendererManager(
                         dlopenLibPaths = finalConfig.dlopenLibPaths,
                         environment = finalConfig.environment,
                         jvmProperties = finalConfig.jvmProperties,
-                        sourcePackage = pkg.packageName,
+                        sourcePackage = appInfo.packageName,
                         isInstalledApp = true,
                         minMcVer = finalConfig.minMcVer,
                         maxMcVer = finalConfig.maxMcVer
@@ -581,7 +674,32 @@ class RendererManager(
             onProgress("Preparing ${plugin.displayName} plugin...", 0.1f)
 
             val activeLibDir = when {
-                plugin.isInstalledApp -> plugin.nativeLibDir
+                plugin.isInstalledApp -> {
+                    val cacheDir = File(internalExecRenderersDir, "plugins/${plugin.id}/${abi.androidAbi}").apply { mkdirs() }
+                    if (plugin.nativeLibDir.isDirectory) {
+                        plugin.nativeLibDir.listFiles { f -> f.isFile && f.name.endsWith(".so") }?.forEach { src ->
+                            val dest = File(cacheDir, src.name)
+                            if (!dest.isFile || dest.length() != src.length() || forceReinstall) {
+                                runCatching {
+                                    src.copyTo(dest, overwrite = true)
+                                    dest.setReadable(true, false)
+                                    dest.setExecutable(true, false)
+                                }
+                            }
+                        }
+                    }
+                    if (cacheDir.listFiles { f -> f.isFile && f.name.endsWith(".so") }.isNullOrEmpty() && plugin.sourcePackage != null) {
+                        val pm = appContext?.packageManager
+                        val appInfo = runCatching { pm?.getApplicationInfo(plugin.sourcePackage, 0) }.getOrNull()
+                        val apkPath = appInfo?.sourceDir ?: appInfo?.publicSourceDir
+                        if (!apkPath.isNullOrBlank() && File(apkPath).isFile) {
+                            runCatching {
+                                extractPluginFromArchive(File(apkPath), cacheDir, abi)
+                            }
+                        }
+                    }
+                    cacheDir
+                }
                 File(plugin.nativeLibDir, abi.androidAbi).isDirectory -> File(plugin.nativeLibDir, abi.androidAbi)
                 else -> plugin.nativeLibDir
             }.apply { mkdirs() }

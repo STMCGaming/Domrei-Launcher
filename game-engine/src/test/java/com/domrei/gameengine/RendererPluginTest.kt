@@ -158,4 +158,48 @@ class RendererPluginTest {
         assertFalse(afterDelete.any { it.id == "plugin:virgl" })
         assertEquals(RendererType.MOBILE_GLUES.displayName, manager.getSelectedRendererDisplayName())
     }
+
+    @Test
+    fun `RendererManager prepares installed app plugin without requiring permissions`() = runBlocking {
+        val tempRoot = Files.createTempDirectory("installed_app_plugin_test").toFile()
+        val externalDir = File(tempRoot, "renderers").apply { mkdirs() }
+        val manager = RendererManager(
+            externalRenderersDir = externalDir,
+            appContext = null
+        )
+
+        val appNativeDir = File(tempRoot, "app_native_libs").apply { mkdirs() }
+        val fakeGl = File(appNativeDir, "libGL.so").apply { writeText("gl binary") }
+        val fakeEgl = File(appNativeDir, "libEGL.so").apply { writeText("egl binary") }
+
+        val installedAppPlugin = RendererPlugin(
+            id = "net.fcl.plugin.turnip",
+            displayName = "Turnip Adreno Vulkan",
+            glLibFileName = "libGL.so",
+            eglLibFileName = "libEGL.so",
+            nativeLibDir = appNativeDir,
+            primaryLibFile = fakeGl,
+            environment = mapOf("MESA_LOADER_DRIVER_OVERRIDE" to "zink", "TU_DEBUG" to "noconform"),
+            jvmProperties = mapOf("turnip.present" to "true"),
+            sourcePackage = "net.fcl.plugin.turnip",
+            isInstalledApp = true
+        )
+
+        val desc = RendererDescriptor.fromPlugin(installedAppPlugin)
+        manager.setSelectedRenderer(desc)
+
+        val prepared = manager.prepareRenderer(
+            descriptor = desc,
+            abi = RuntimeAbi.ARM64
+        ).getOrThrow()
+
+        assertNotNull(prepared)
+        assertEquals(RendererType.CUSTOM_PLUGIN, prepared.type)
+        assertEquals("Turnip Adreno Vulkan", prepared.customDisplayName)
+        assertEquals("zink", prepared.environmentVars["MESA_LOADER_DRIVER_OVERRIDE"])
+        assertEquals("noconform", prepared.environmentVars["TU_DEBUG"])
+        assertEquals("true", prepared.jvmSystemProperties["turnip.present"])
+        assertTrue(prepared.nativeLibDir.exists())
+        assertTrue(File(prepared.nativeLibDir, "libGL.so").exists())
+    }
 }

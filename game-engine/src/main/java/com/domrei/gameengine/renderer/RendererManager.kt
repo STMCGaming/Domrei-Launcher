@@ -77,6 +77,133 @@ class RendererManager(
         preferenceFile.writeText(id)
     }
 
+    fun getRendererConfigSpec(descriptor: RendererDescriptor): RendererConfigSpec {
+        if (descriptor.isPlugin && descriptor.pluginInfo != null) {
+            val plugin = descriptor.pluginInfo
+            if (plugin.configSpec.isNotEmpty) {
+                return plugin.configSpec
+            }
+            val isMobileGl = plugin.id.contains("mobilegl", ignoreCase = true) ||
+                plugin.displayName.contains("mobilegl", ignoreCase = true) ||
+                plugin.displayName.contains("mobile gl", ignoreCase = true)
+            if (isMobileGl) {
+                return RendererConfigSpec.createMobileGlSpec()
+            }
+            return RendererConfigSpec()
+        }
+
+        return when (descriptor.builtInType) {
+            RendererType.MOBILE_GLUES -> RendererConfigSpec.createMobileGlSpec()
+            RendererType.KRYPTON_WRAPPER -> RendererConfigSpec.createKryptonSpec()
+            RendererType.CUSTOM_PLUGIN, null -> RendererConfigSpec()
+        }
+    }
+
+    private fun getConfigStateFileForRenderer(rendererId: String): File {
+        val safeId = rendererId.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        return File(externalRenderersDir, "config_state_${safeId}.json")
+    }
+
+    fun getRendererConfigState(descriptor: RendererDescriptor): RendererConfigState {
+        val spec = getRendererConfigSpec(descriptor)
+        val file = getConfigStateFileForRenderer(descriptor.id)
+        val savedState = runCatching {
+            if (file.isFile) {
+                val json = JSONObject(file.readText())
+                val selObj = json.optJSONObject("selectedValues") ?: JSONObject()
+                val selMap = mutableMapOf<String, String>()
+                val sKeys = selObj.keys()
+                while (sKeys.hasNext()) {
+                    val k = sKeys.next()
+                    selMap[k] = selObj.optString(k)
+                }
+
+                val togObj = json.optJSONObject("toggledKeys") ?: JSONObject()
+                val togMap = mutableMapOf<String, Boolean>()
+                val tKeys = togObj.keys()
+                while (tKeys.hasNext()) {
+                    val k = tKeys.next()
+                    togMap[k] = togObj.optBoolean(k)
+                }
+
+                RendererConfigState(selectedValues = selMap, toggledKeys = togMap)
+            } else null
+        }.getOrNull()
+
+        val selMap = spec.selectables.associate { it.key to (savedState?.selectedValues?.get(it.key) ?: it.defaultValue) }.toMutableMap()
+        val togMap = spec.toggleables.associate { it.key to (savedState?.toggledKeys?.get(it.key) ?: it.defaultEnabled) }.toMutableMap()
+        return RendererConfigState(selectedValues = selMap, toggledKeys = togMap)
+    }
+
+    fun saveRendererConfigState(descriptor: RendererDescriptor, state: RendererConfigState) {
+        val file = getConfigStateFileForRenderer(descriptor.id)
+        runCatching {
+            externalRenderersDir.mkdirs()
+            val json = JSONObject()
+            val selObj = JSONObject()
+            state.selectedValues.forEach { (k, v) -> selObj.put(k, v) }
+            json.put("selectedValues", selObj)
+
+            val togObj = JSONObject()
+            state.toggledKeys.forEach { (k, v) -> togObj.put(k, v) }
+            json.put("toggledKeys", togObj)
+
+            file.writeText(json.toString(2))
+        }
+    }
+
+    fun getRendererConfigSummary(descriptor: RendererDescriptor, state: RendererConfigState = getRendererConfigState(descriptor)): String {
+        val spec = getRendererConfigSpec(descriptor)
+        val primarySel = spec.selectables.firstOrNull()?.let {
+            state.selectedValues[it.key] ?: it.defaultValue
+        }
+        val activeToggles = spec.toggleables.count {
+            state.toggledKeys[it.key] ?: it.defaultEnabled
+        }
+        return when {
+            primarySel != null && activeToggles > 0 -> "$primarySel ($activeToggles active)"
+            primarySel != null -> primarySel
+            activeToggles > 0 -> "$activeToggles active"
+            else -> "Standard"
+        }
+    }
+
+    fun getEffectiveEnvironment(descriptor: RendererDescriptor, state: RendererConfigState? = null): Map<String, String> {
+        val spec = getRendererConfigSpec(descriptor)
+        val currentState = state ?: getRendererConfigState(descriptor)
+        val env = linkedMapOf<String, String>()
+
+        for (sel in spec.selectables) {
+            val v = currentState.selectedValues[sel.key] ?: sel.defaultValue
+            if (v.isNotBlank()) {
+                env[sel.key] = v
+            }
+        }
+
+        for (tog in spec.toggleables) {
+            val enabled = currentState.toggledKeys[tog.key] ?: tog.defaultEnabled
+            if (enabled) {
+                env[tog.key] = tog.value
+                if (tog.key == "MOBILEGL_USE_ANGLE") {
+                    env["MG_ENABLE_ANGLE"] = "1"
+                }
+                if (tog.key == "MG_ENABLE_EXT_COMPUTE") {
+                    env["MG_ENABLE_EXT_GL43"] = "1"
+                }
+            } else {
+                if (tog.key == "MOBILEGL_USE_ANGLE") {
+                    env["MOBILEGL_USE_ANGLE"] = "0"
+                    env["MG_ENABLE_ANGLE"] = "0"
+                }
+                if (tog.key == "MG_ENABLE_NO_ERROR") {
+                    env["MG_ENABLE_NO_ERROR"] = "0"
+                }
+            }
+        }
+
+        return env
+    }
+
     fun getAvailableRendererConfigs(descriptor: RendererDescriptor): List<RendererConfigOption> {
         if (descriptor.isPlugin && descriptor.pluginInfo != null) {
             val plugin = descriptor.pluginInfo
@@ -381,6 +508,7 @@ class RendererManager(
                         dlopenLibPaths = finalConfig.dlopenLibPaths,
                         environment = finalConfig.environment,
                         jvmProperties = finalConfig.jvmProperties,
+                        configSpec = finalConfig.configSpec,
                         configurations = finalConfig.configurations,
                         sourcePackage = appInfo.packageName,
                         isInstalledApp = true,
@@ -459,6 +587,7 @@ class RendererManager(
             dlopenLibPaths = config.dlopenLibPaths,
             environment = config.environment,
             jvmProperties = config.jvmProperties,
+            configSpec = config.configSpec,
             configurations = config.configurations,
             sourceFile = targetArchive,
             isInstalledApp = false,
@@ -806,6 +935,7 @@ class RendererManager(
             envVars["LIBGL_EGL"] = plugin.eglLibFileName
             envVars.putAll(plugin.environment)
             envVars.putAll(activeConfig.environment)
+            envVars.putAll(getEffectiveEnvironment(RendererDescriptor.fromPlugin(plugin)))
 
             val jvmProps = linkedMapOf<String, String>()
             jvmProps["org.lwjgl.opengl.libname"] = primaryGlFile.name
@@ -852,23 +982,29 @@ class RendererManager(
         onProgress: (String, Float) -> Unit = { _, _ -> }
     ): Result<PreparedRenderer> = withContext(Dispatchers.IO) {
         val activeConfig = configOption ?: getSelectedRendererConfig(RendererDescriptor.fromBuiltIn(type))
+        val configStateEnv = getEffectiveEnvironment(RendererDescriptor.fromBuiltIn(type))
+        val combinedEnv = activeConfig.environment.toMutableMap().apply { putAll(configStateEnv) }
         var effectiveMgConfig = mobileGluesConfig
-        if (activeConfig.environment["MG_ENABLE_ANGLE"] == "1" || activeConfig.environment["MOBILEGL_USE_ANGLE"] == "1") {
+        if (combinedEnv["MG_ENABLE_ANGLE"] == "1" || combinedEnv["MOBILEGL_USE_ANGLE"] == "1") {
             effectiveMgConfig = effectiveMgConfig.copy(enableANGLE = 1)
+        } else if (combinedEnv["MOBILEGL_USE_ANGLE"] == "0") {
+            effectiveMgConfig = effectiveMgConfig.copy(enableANGLE = 0)
         }
-        if (activeConfig.environment["MG_ENABLE_NO_ERROR"] == "1") {
+        if (combinedEnv["MG_ENABLE_NO_ERROR"] == "1") {
             effectiveMgConfig = effectiveMgConfig.copy(enableNoError = 1)
+        } else if (combinedEnv["MG_ENABLE_NO_ERROR"] == "0") {
+            effectiveMgConfig = effectiveMgConfig.copy(enableNoError = 0)
         }
-        activeConfig.environment["MG_MULTIDRAW_MODE"]?.toIntOrNull()?.let {
+        combinedEnv["MG_MULTIDRAW_MODE"]?.toIntOrNull()?.let {
             effectiveMgConfig = effectiveMgConfig.copy(multidrawMode = it)
         }
-        activeConfig.environment["MG_MAX_GLSL_CACHE_SIZE"]?.toIntOrNull()?.let {
+        combinedEnv["MG_MAX_GLSL_CACHE_SIZE"]?.toIntOrNull()?.let {
             effectiveMgConfig = effectiveMgConfig.copy(maxGlslCacheSize = it)
         }
-        if (activeConfig.environment["MG_ENABLE_EXT_COMPUTE"] == "1") {
+        if (combinedEnv["MG_ENABLE_EXT_COMPUTE"] == "1") {
             effectiveMgConfig = effectiveMgConfig.copy(enableExtComputeShader = 1)
         }
-        if (activeConfig.environment["MG_ENABLE_EXT_GL43"] == "1") {
+        if (combinedEnv["MG_ENABLE_EXT_GL43"] == "1") {
             effectiveMgConfig = effectiveMgConfig.copy(enableExtGL43 = 1)
         }
         runCatching {
@@ -950,7 +1086,7 @@ class RendererManager(
                 mobileGluesConfig = effectiveMgConfig,
                 kryptonConfig = kryptonConfig
             ).toMutableMap()
-            envVars.putAll(activeConfig.environment)
+            envVars.putAll(combinedEnv)
 
             val jvmProps = buildRendererJvmProperties(
                 type = type,

@@ -2,6 +2,8 @@ package com.domrei.gameengine
 
 import com.domrei.gameengine.renderer.PluginConfigData
 import com.domrei.gameengine.renderer.RendererConfigOption
+import com.domrei.gameengine.renderer.RendererConfigSpec
+import com.domrei.gameengine.renderer.RendererConfigState
 import com.domrei.gameengine.renderer.RendererDescriptor
 import com.domrei.gameengine.renderer.RendererManager
 import com.domrei.gameengine.renderer.RendererPlugin
@@ -253,5 +255,56 @@ class RendererPluginTest {
 
         val preparedPlugin = manager.preparePluginRenderer(plugin, pluginSelected, RuntimeAbi.ARM64).getOrThrow()
         assertEquals("1", preparedPlugin.environmentVars["FANCY_GL"])
+    }
+
+    @Test
+    fun `RendererConfigSpec and state manage switches and dropdown selections like ZalithLauncher2`() = runBlocking {
+        val tempRoot = Files.createTempDirectory("spec_state_test").toFile()
+        val externalDir = File(tempRoot, "renderers").apply { mkdirs() }
+        val manager = RendererManager(
+            externalRenderersDir = externalDir,
+            appContext = null
+        )
+
+        // Built-in MobileGlues has spec with both selectables and toggleables
+        val mgDesc = RendererDescriptor.fromBuiltIn(RendererType.MOBILE_GLUES)
+        val mgSpec = manager.getRendererConfigSpec(mgDesc)
+        assertTrue(mgSpec.isNotEmpty)
+        assertTrue(mgSpec.selectables.any { it.key == "MOBILEGL_BACKEND_TYPE" })
+        assertTrue(mgSpec.toggleables.any { it.key == "MOBILEGL_USE_ANGLE" })
+
+        // Check initial default state
+        val initialState = manager.getRendererConfigState(mgDesc)
+        assertEquals("DirectGLES", initialState.selectedValues["MOBILEGL_BACKEND_TYPE"])
+        assertEquals(false, initialState.toggledKeys["MOBILEGL_USE_ANGLE"])
+
+        // Modify state (switch ANGLE on and change backend to DirectVulkan)
+        val modifiedState = initialState.copy(
+            selectedValues = mapOf("MOBILEGL_BACKEND_TYPE" to "DirectVulkan"),
+            toggledKeys = initialState.toggledKeys + ("MOBILEGL_USE_ANGLE" to true)
+        )
+        manager.saveRendererConfigState(mgDesc, modifiedState)
+
+        val retrievedState = manager.getRendererConfigState(mgDesc)
+        assertEquals("DirectVulkan", retrievedState.selectedValues["MOBILEGL_BACKEND_TYPE"])
+        assertEquals(true, retrievedState.toggledKeys["MOBILEGL_USE_ANGLE"])
+
+        // Effective environment includes both
+        val env = manager.getEffectiveEnvironment(mgDesc, retrievedState)
+        assertEquals("DirectVulkan", env["MOBILEGL_BACKEND_TYPE"])
+        assertEquals("1", env["MOBILEGL_USE_ANGLE"])
+        assertEquals("1", env["MG_ENABLE_ANGLE"])
+
+        // Generic plugin without spec has empty spec (dropdown should not show)
+        val plainPlugin = RendererPlugin(
+            id = "plain_virgl",
+            displayName = "VirGL",
+            nativeLibDir = externalDir,
+            primaryLibFile = File(externalDir, "libGL.so")
+        )
+        val plainDesc = RendererDescriptor.fromPlugin(plainPlugin)
+        val plainSpec = manager.getRendererConfigSpec(plainDesc)
+        assertTrue(plainSpec.isEmpty)
+        assertFalse(plainSpec.isNotEmpty)
     }
 }

@@ -18,6 +18,7 @@ data class RendererPlugin(
     val dlopenLibPaths: List<String> = emptyList(),
     val environment: Map<String, String> = emptyMap(),
     val jvmProperties: Map<String, String> = emptyMap(),
+    val configSpec: RendererConfigSpec = RendererConfigSpec(),
     val configurations: List<RendererConfigOption> = emptyList(),
     val sourcePackage: String? = null,
     val sourceFile: File? = null,
@@ -25,6 +26,126 @@ data class RendererPlugin(
     val version: String = "1.0",
     val minMcVer: String? = null,
     val maxMcVer: String? = null
+)
+
+/**
+ * A selectable configuration item (dropdown selection) from ZalithLauncher2 / FCL DSL.
+ */
+data class SelectableConfigItem(
+    val key: String,
+    val title: String = key,
+    val options: List<String>,
+    val defaultValue: String = options.firstOrNull().orEmpty()
+)
+
+/**
+ * A toggleable configuration item (Switch) from ZalithLauncher2 / FCL DSL.
+ */
+data class ToggleableConfigItem(
+    val key: String,
+    val title: String = key,
+    val value: String = "1",
+    val defaultEnabled: Boolean = false,
+    val description: String? = null
+)
+
+/**
+ * Complete specification of available configuration options for a renderer.
+ */
+data class RendererConfigSpec(
+    val selectables: List<SelectableConfigItem> = emptyList(),
+    val toggleables: List<ToggleableConfigItem> = emptyList()
+) {
+    val isEmpty: Boolean
+        get() = selectables.isEmpty() && toggleables.isEmpty()
+
+    val isNotEmpty: Boolean
+        get() = !isEmpty
+
+    companion object {
+        fun createMobileGlSpec(): RendererConfigSpec = RendererConfigSpec(
+            selectables = listOf(
+                SelectableConfigItem(
+                    key = "MOBILEGL_BACKEND_TYPE",
+                    title = "Backend Type",
+                    options = listOf("DirectGLES", "DirectVulkan"),
+                    defaultValue = "DirectGLES"
+                )
+            ),
+            toggleables = listOf(
+                ToggleableConfigItem(
+                    key = "MOBILEGL_USE_ANGLE",
+                    title = "Use ANGLE (Vulkan)",
+                    value = "1",
+                    defaultEnabled = false,
+                    description = "Run OpenGL ES over ANGLE Vulkan backend"
+                ),
+                ToggleableConfigItem(
+                    key = "MOBILEGL_RELAXED_SEMANTICS",
+                    title = "Relaxed Core Semantics",
+                    value = "1",
+                    defaultEnabled = false,
+                    description = "Relax strict GL rules to improve mod compatibility"
+                ),
+                ToggleableConfigItem(
+                    key = "MG_ENABLE_NO_ERROR",
+                    title = "Ignore GL Errors",
+                    value = "1",
+                    defaultEnabled = true,
+                    description = "Suppress non-fatal errors during gameplay"
+                ),
+                ToggleableConfigItem(
+                    key = "MG_MULTIDRAW_MODE",
+                    title = "MultiDraw Indirect",
+                    value = "5",
+                    defaultEnabled = true,
+                    description = "Hardware multidraw acceleration for 1.17+ versions"
+                ),
+                ToggleableConfigItem(
+                    key = "MG_ENABLE_EXT_COMPUTE",
+                    title = "Compute Shaders & GL 4.3",
+                    value = "1",
+                    defaultEnabled = false,
+                    description = "Enable compute shaders for modern shaders and Iris"
+                )
+            )
+        )
+
+        fun createKryptonSpec(): RendererConfigSpec = RendererConfigSpec(
+            selectables = listOf(
+                SelectableConfigItem(
+                    key = "LIBGL_GL",
+                    title = "OpenGL Profile",
+                    options = listOf("3.1", "2.1"),
+                    defaultValue = "3.1"
+                )
+            ),
+            toggleables = listOf(
+                ToggleableConfigItem(
+                    key = "LIBGL_VBO",
+                    title = "VBO Buffers",
+                    value = "1",
+                    defaultEnabled = true,
+                    description = "Hardware vertex buffer acceleration"
+                ),
+                ToggleableConfigItem(
+                    key = "LIBGL_NOERROR",
+                    title = "Ignore Errors",
+                    value = "1",
+                    defaultEnabled = true,
+                    description = "Suppress OpenGL error checking for higher FPS"
+                )
+            )
+        )
+    }
+}
+
+/**
+ * Persisted state of a renderer's configuration (selected dropdown values & switch toggles).
+ */
+data class RendererConfigState(
+    val selectedValues: Map<String, String> = emptyMap(),
+    val toggledKeys: Map<String, Boolean> = emptyMap()
 )
 
 /**
@@ -177,6 +298,7 @@ data class PluginConfigData(
     val dlopenLibPaths: List<String> = emptyList(),
     val environment: Map<String, String> = emptyMap(),
     val jvmProperties: Map<String, String> = emptyMap(),
+    val configSpec: RendererConfigSpec = RendererConfigSpec(),
     val configurations: List<RendererConfigOption> = emptyList(),
     val minMcVer: String? = null,
     val maxMcVer: String? = null
@@ -354,6 +476,9 @@ data class PluginConfigData(
                 }
             }
 
+            val parsedSelectables = mutableListOf<SelectableConfigItem>()
+            val parsedToggleables = mutableListOf<ToggleableConfigItem>()
+
             val selectableArr = json.optJSONObject("env")?.optJSONArray("selectable")
                 ?: json.optJSONArray("selectable")
             if (selectableArr != null) {
@@ -361,21 +486,50 @@ data class PluginConfigData(
                     val selObj = selectableArr.optJSONObject(i) ?: continue
                     val key = selObj.optString("key").ifBlank { selObj.optString("name") }
                     val title = selObj.optString("title").ifBlank { key }
-                    val itemsArr = selObj.optJSONArray("values")
+                    val itemsArr = selObj.optJSONArray("items")
+                        ?: selObj.optJSONArray("values")
                         ?: selObj.optJSONObject("items")?.optJSONArray("values")
-                    if (itemsArr != null && key.isNotBlank()) {
+                    val options = mutableListOf<String>()
+                    if (itemsArr != null) {
                         for (j in 0 until itemsArr.length()) {
                             val v = itemsArr.optString(j)
-                            if (v.isNotBlank()) {
-                                parsedConfigs.add(
-                                    RendererConfigOption(
-                                        id = "$key=$v",
-                                        displayName = if (title != key) "$title: $v" else v,
-                                        environment = mapOf(key to v)
-                                    )
-                                )
-                            }
+                            if (v.isNotBlank()) options.add(v)
                         }
+                    }
+                    val defaultVal = selObj.optString("defaultValue").ifBlank { options.firstOrNull().orEmpty() }
+                    if (key.isNotBlank() && options.isNotEmpty()) {
+                        parsedSelectables.add(
+                            SelectableConfigItem(
+                                key = key,
+                                title = title,
+                                options = options,
+                                defaultValue = defaultVal
+                            )
+                        )
+                    }
+                }
+            }
+
+            val toggleableArr = json.optJSONObject("env")?.optJSONArray("toggleable")
+                ?: json.optJSONArray("toggleable")
+            if (toggleableArr != null) {
+                for (i in 0 until toggleableArr.length()) {
+                    val togObj = toggleableArr.optJSONObject(i) ?: continue
+                    val key = togObj.optString("key").ifBlank { togObj.optString("name") }
+                    val title = togObj.optString("title").ifBlank { key }
+                    val value = togObj.optString("value").ifBlank { "1" }
+                    val toggle = togObj.optBoolean("toggle", togObj.optBoolean("default", false))
+                    val desc = togObj.optString("description").takeIf { it.isNotBlank() }
+                    if (key.isNotBlank()) {
+                        parsedToggleables.add(
+                            ToggleableConfigItem(
+                                key = key,
+                                title = title,
+                                value = value,
+                                defaultEnabled = toggle,
+                                description = desc
+                            )
+                        )
                     }
                 }
             }
@@ -383,6 +537,14 @@ data class PluginConfigData(
             val isMobileGl = rawId.contains("mobilegl", ignoreCase = true) ||
                 rawName.contains("mobilegl", ignoreCase = true) ||
                 rawName.contains("mobile gl", ignoreCase = true)
+
+            val finalSpec = if (parsedSelectables.isNotEmpty() || parsedToggleables.isNotEmpty()) {
+                RendererConfigSpec(selectables = parsedSelectables, toggleables = parsedToggleables)
+            } else if (isMobileGl) {
+                RendererConfigSpec.createMobileGlSpec()
+            } else {
+                RendererConfigSpec()
+            }
 
             if (parsedConfigs.isEmpty() && isMobileGl) {
                 parsedConfigs.addAll(RendererConfigOption.createMobileGlPresets())
@@ -396,6 +558,7 @@ data class PluginConfigData(
                 dlopenLibPaths = dlopenLibs,
                 environment = envMap,
                 jvmProperties = jvmProps,
+                configSpec = finalSpec,
                 configurations = parsedConfigs,
                 minMcVer = (json.optString("minMcVer").ifBlank { json.optString("minMCVer") }).takeIf { it.isNotBlank() },
                 maxMcVer = (json.optString("maxMcVer").ifBlank { json.optString("maxMCVer") }).takeIf { it.isNotBlank() }

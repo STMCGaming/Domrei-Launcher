@@ -117,6 +117,7 @@
     <string name="settings_renderer_title">Renderer</string>
     <string name="settings_current_renderer_prefix">Current:</string>
     <string name="settings_plugin_badge">Plugin</string>
+    <string name="settings_renderer_config_title">Renderer Configuration</string>
     <string name="settings_res_scale_title">Resolution Scaling</string>
     <string name="settings_display_options_title">Display Options</string>
     <string name="settings_max_refresh_rate_title">Request Max Refresh Rate</string>

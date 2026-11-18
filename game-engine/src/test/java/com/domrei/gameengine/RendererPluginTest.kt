@@ -1,6 +1,7 @@
 package com.domrei.gameengine
 
 import com.domrei.gameengine.renderer.PluginConfigData
+import com.domrei.gameengine.renderer.RendererConfigOption
 import com.domrei.gameengine.renderer.RendererDescriptor
 import com.domrei.gameengine.renderer.RendererManager
 import com.domrei.gameengine.renderer.RendererPlugin
@@ -201,5 +202,56 @@ class RendererPluginTest {
         assertEquals("true", prepared.jvmSystemProperties["turnip.present"])
         assertTrue(prepared.nativeLibDir.exists())
         assertTrue(File(prepared.nativeLibDir, "libGL.so").exists())
+    }
+
+    @Test
+    fun `RendererManager provides and applies MobileGL configurations`() = runBlocking {
+        val tempRoot = Files.createTempDirectory("mobilegl_config_test").toFile()
+        val externalDir = File(tempRoot, "renderers").apply { mkdirs() }
+        val manager = RendererManager(
+            externalRenderersDir = externalDir,
+            appContext = null
+        )
+
+        val mgDesc = RendererDescriptor.fromBuiltIn(RendererType.MOBILE_GLUES)
+        val configs = manager.getAvailableRendererConfigs(mgDesc)
+        assertTrue(configs.any { it.id == "direct_gles" })
+        assertTrue(configs.any { it.id == "direct_gles_angle" })
+        assertTrue(configs.any { it.id == "direct_vulkan" })
+
+        // Select ANGLE config
+        val angleConfig = configs.first { it.id == "direct_gles_angle" }
+        manager.setSelectedRendererConfig(mgDesc, angleConfig)
+
+        val selected = manager.getSelectedRendererConfig(mgDesc)
+        assertEquals("direct_gles_angle", selected.id)
+        assertEquals("1", selected.environment["MOBILEGL_USE_ANGLE"])
+
+        // Also test plugin with custom configurations
+        val customConfigs = listOf(
+            RendererConfigOption(id = "fast", displayName = "Fast Mode", environment = mapOf("FAST_GL" to "1")),
+            RendererConfigOption(id = "fancy", displayName = "Fancy Mode", environment = mapOf("FANCY_GL" to "1"))
+        )
+        val dummyLibDir = File(tempRoot, "plugin_libs").apply { mkdirs() }
+        val dummyGl = File(dummyLibDir, "libGL.so").apply { writeText("gl") }
+        val plugin = RendererPlugin(
+            id = "custom_renderer",
+            displayName = "Custom Renderer",
+            nativeLibDir = dummyLibDir,
+            primaryLibFile = dummyGl,
+            configurations = customConfigs
+        )
+        val pluginDesc = RendererDescriptor.fromPlugin(plugin)
+        val pluginConfigs = manager.getAvailableRendererConfigs(pluginDesc)
+        assertEquals(2, pluginConfigs.size)
+        assertEquals("fast", pluginConfigs[0].id)
+        assertEquals("fancy", pluginConfigs[1].id)
+
+        manager.setSelectedRendererConfig(pluginDesc, customConfigs[1])
+        val pluginSelected = manager.getSelectedRendererConfig(pluginDesc)
+        assertEquals("fancy", pluginSelected.id)
+
+        val preparedPlugin = manager.preparePluginRenderer(plugin, pluginSelected, RuntimeAbi.ARM64).getOrThrow()
+        assertEquals("1", preparedPlugin.environmentVars["FANCY_GL"])
     }
 }

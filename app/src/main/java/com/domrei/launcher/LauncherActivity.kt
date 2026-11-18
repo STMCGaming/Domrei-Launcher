@@ -176,6 +176,7 @@ import kotlin.math.roundToInt
 import com.domrei.gameengine.DomreiGameEngine
 import com.domrei.gameengine.GameEngineState
 import com.domrei.gameengine.GameLaunchRequest
+import com.domrei.gameengine.renderer.RendererConfigOption
 import com.domrei.gameengine.renderer.RendererDescriptor
 import com.domrei.gameengine.renderer.RendererType
 import com.domrei.launcher.minecraft.DownloadFileItem
@@ -502,6 +503,12 @@ fun LauncherScreen(
     var availableRenderers by remember {
         mutableStateOf(gameEngine.rendererManager.getAvailableRenderers())
     }
+    var selectedRendererConfig by remember {
+        mutableStateOf(gameEngine.rendererManager.getSelectedRendererConfig(selectedRendererDescriptor))
+    }
+    var availableRendererConfigs by remember {
+        mutableStateOf(gameEngine.rendererManager.getAvailableRendererConfigs(selectedRendererDescriptor))
+    }
     val selectedRenderer = selectedRendererDescriptor.effectiveType
     val displayPrefs = remember(context) { DisplayPreferences(context) }
     var resolutionScale by remember { mutableIntStateOf(displayPrefs.loadResolutionScale()) }
@@ -744,6 +751,8 @@ fun LauncherScreen(
     LaunchedEffect(currentDestination) {
         if (currentDestination == LauncherDestination.SETTINGS) {
             availableRenderers = gameEngine.rendererManager.getAvailableRenderers()
+            availableRendererConfigs = gameEngine.rendererManager.getAvailableRendererConfigs(selectedRendererDescriptor)
+            selectedRendererConfig = gameEngine.rendererManager.getSelectedRendererConfig(selectedRendererDescriptor)
         }
     }
 
@@ -1244,6 +1253,14 @@ fun LauncherScreen(
                 onRendererSelect = { newDescriptor ->
                     gameEngine.rendererManager.setSelectedRenderer(newDescriptor)
                     selectedRendererDescriptor = newDescriptor
+                    availableRendererConfigs = gameEngine.rendererManager.getAvailableRendererConfigs(newDescriptor)
+                    selectedRendererConfig = gameEngine.rendererManager.getSelectedRendererConfig(newDescriptor)
+                },
+                selectedRendererConfig = selectedRendererConfig,
+                availableRendererConfigs = availableRendererConfigs,
+                onRendererConfigSelect = { newConfig ->
+                    gameEngine.rendererManager.setSelectedRendererConfig(selectedRendererDescriptor, newConfig)
+                    selectedRendererConfig = newConfig
                 },
                 resolutionScale = resolutionScale,
                 onResolutionScaleChange = { newScale ->
@@ -4195,6 +4212,9 @@ fun UnifiedLeftRailAndPanel(
     selectedRendererDescriptor: RendererDescriptor,
     availableRenderers: List<RendererDescriptor>,
     onRendererSelect: (RendererDescriptor) -> Unit,
+    selectedRendererConfig: RendererConfigOption,
+    availableRendererConfigs: List<RendererConfigOption>,
+    onRendererConfigSelect: (RendererConfigOption) -> Unit,
     resolutionScale: Int,
     onResolutionScaleChange: (Int) -> Unit,
     screenWidth: Dp,
@@ -4382,6 +4402,9 @@ fun UnifiedLeftRailAndPanel(
                                     selectedRendererDescriptor = selectedRendererDescriptor,
                                     availableRenderers = availableRenderers,
                                     onRendererSelect = onRendererSelect,
+                                    selectedRendererConfig = selectedRendererConfig,
+                                    availableRendererConfigs = availableRendererConfigs,
+                                    onRendererConfigSelect = onRendererConfigSelect,
                                     resolutionScale = resolutionScale,
                                     onResolutionScaleChange = onResolutionScaleChange,
                                 )
@@ -5849,6 +5872,9 @@ private fun SettingsPanelContent(
     selectedRendererDescriptor: RendererDescriptor,
     availableRenderers: List<RendererDescriptor>,
     onRendererSelect: (RendererDescriptor) -> Unit,
+    selectedRendererConfig: RendererConfigOption,
+    availableRendererConfigs: List<RendererConfigOption>,
+    onRendererConfigSelect: (RendererConfigOption) -> Unit,
     resolutionScale: Int,
     onResolutionScaleChange: (Int) -> Unit,
 ) {
@@ -5971,6 +5997,9 @@ private fun SettingsPanelContent(
                         selectedRendererDescriptor = selectedRendererDescriptor,
                         availableRenderers = availableRenderers,
                         onRendererSelect = onRendererSelect,
+                        selectedRendererConfig = selectedRendererConfig,
+                        availableRendererConfigs = availableRendererConfigs,
+                        onRendererConfigSelect = onRendererConfigSelect,
                         resolutionScale = resolutionScale,
                         onResolutionScaleChange = onResolutionScaleChange,
                     )
@@ -6144,6 +6173,9 @@ private fun DisplayAndRendererSettingsContent(
     selectedRendererDescriptor: RendererDescriptor,
     availableRenderers: List<RendererDescriptor>,
     onRendererSelect: (RendererDescriptor) -> Unit,
+    selectedRendererConfig: RendererConfigOption,
+    availableRendererConfigs: List<RendererConfigOption>,
+    onRendererConfigSelect: (RendererConfigOption) -> Unit,
     resolutionScale: Int,
     onResolutionScaleChange: (Int) -> Unit,
 ) {
@@ -6305,21 +6337,14 @@ private fun DisplayAndRendererSettingsContent(
                             )
 
                             if (descriptor.isPlugin) {
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(colors.accent.copy(alpha = 0.18f))
-                                        .padding(horizontal = 5.dp, vertical = 2.dp),
-                                ) {
-                                    Text(
-                                        text = stringResource(R.string.settings_plugin_badge),
-                                        color = colors.accent,
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            fontSize = 9.sp,
-                                            fontWeight = FontWeight.Bold,
-                                        ),
-                                    )
-                                }
+                                Text(
+                                    text = stringResource(R.string.settings_plugin_badge),
+                                    color = colors.accent,
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                    ),
+                                )
                             }
                         }
                     }
@@ -6328,7 +6353,178 @@ private fun DisplayAndRendererSettingsContent(
         }
     }
 
-    // 2. Display Resolution Scaling (Resize) Card
+    // 2. Renderer Configuration Card
+    var isConfigDropdownOpen by remember { mutableStateOf(false) }
+    val configChevronRotation by animateFloatAsState(
+        targetValue = if (isConfigDropdownOpen) 180f else 0f,
+        animationSpec = spring(
+            dampingRatio = 0.72f,
+            stiffness = 420f,
+        ),
+        label = "rendererConfigChevronRotation",
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(cardShape)
+            .background(colors.surfaceCard)
+            .border(1.dp, colors.borderDefault, cardShape)
+            .padding(14.dp)
+            .animateContentSize(
+                animationSpec = spring(
+                    dampingRatio = 0.82f,
+                    stiffness = 420f,
+                ),
+            ),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        // Clickable header Column: "Renderer Configuration" on top, Current: {selectedRendererConfig.displayName} and chevron below
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .smoothPressClickable(
+                    pressScale = 0.98f,
+                    onClick = { isConfigDropdownOpen = !isConfigDropdownOpen },
+                ),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.settings_renderer_config_title),
+                color = colors.textPrimary,
+                style = MaterialTheme.typography.titleSmall.copy(
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                ),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = buildAnnotatedString {
+                        withStyle(
+                            SpanStyle(
+                                color = colors.textPrimary,
+                                fontWeight = FontWeight.Medium,
+                            ),
+                        ) {
+                            append(stringResource(R.string.settings_current_renderer_prefix))
+                            append(" ")
+                        }
+                        withStyle(
+                            SpanStyle(
+                                color = colors.accent,
+                                fontWeight = FontWeight.SemiBold,
+                            ),
+                        ) {
+                            append(selectedRendererConfig.displayName)
+                        }
+                    },
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 13.sp,
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_chevron_down),
+                    contentDescription = stringResource(R.string.action_more_options),
+                    tint = colors.textSecondary,
+                    modifier = Modifier
+                        .size(18.dp)
+                        .graphicsLayer { rotationZ = configChevronRotation },
+                )
+            }
+        }
+
+        // Dropdown Menu Body: Renderer configuration options list with animated expansion
+        AnimatedVisibility(
+            visible = isConfigDropdownOpen,
+            enter = fadeIn(tween(180, easing = FastOutSlowInEasing)) + expandVertically(
+                animationSpec = spring(dampingRatio = 0.82f, stiffness = 420f),
+            ),
+            exit = fadeOut(tween(140, easing = FastOutSlowInEasing)) + shrinkVertically(
+                animationSpec = tween(180, easing = FastOutSlowInEasing),
+            ),
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(colors.borderSubtle),
+                )
+
+                Spacer(modifier = Modifier.height(2.dp))
+
+                availableRendererConfigs.forEach { configOption ->
+                    val isSelected = configOption.id == selectedRendererConfig.id
+                    val optionShape = RoundedCornerShape(8.dp)
+                    val optionBg by animateColorAsState(
+                        targetValue = if (isSelected) colors.surfaceCardSelected else colors.transparent,
+                        animationSpec = tween(durationMillis = 180),
+                        label = "rendererConfigOptionBg_${configOption.id}",
+                    )
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .smoothPressClickable(
+                                pressScale = 0.98f,
+                                onClick = {
+                                    onRendererConfigSelect(configOption)
+                                    isConfigDropdownOpen = false
+                                },
+                            )
+                            .clip(optionShape)
+                            .background(optionBg)
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f, fill = false),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Text(
+                                text = configOption.displayName,
+                                color = if (isSelected) colors.accent else colors.textPrimary,
+                                style = MaterialTheme.typography.bodyLarge.copy(
+                                    fontSize = 13.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            val desc = configOption.description
+                            if (!desc.isNullOrBlank()) {
+                                Text(
+                                    text = desc,
+                                    color = colors.textSecondary,
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontSize = 11.sp,
+                                    ),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Display Resolution Scaling (Resize) Card
     Column(
         modifier = Modifier
             .fillMaxWidth()

@@ -18,6 +18,7 @@ data class RendererPlugin(
     val dlopenLibPaths: List<String> = emptyList(),
     val environment: Map<String, String> = emptyMap(),
     val jvmProperties: Map<String, String> = emptyMap(),
+    val configurations: List<RendererConfigOption> = emptyList(),
     val sourcePackage: String? = null,
     val sourceFile: File? = null,
     val isInstalledApp: Boolean = false,
@@ -25,6 +26,109 @@ data class RendererPlugin(
     val minMcVer: String? = null,
     val maxMcVer: String? = null
 )
+
+/**
+ * Configuration option / preset for a renderer or renderer plugin
+ * (e.g. MobileGL DirectGLES vs DirectVulkan vs ANGLE, or custom plugin configurations).
+ */
+data class RendererConfigOption(
+    val id: String,
+    val displayName: String,
+    val description: String? = null,
+    val environment: Map<String, String> = emptyMap(),
+    val jvmProperties: Map<String, String> = emptyMap()
+) {
+    companion object {
+        fun createMobileGlPresets(): List<RendererConfigOption> = listOf(
+            RendererConfigOption(
+                id = "direct_gles",
+                displayName = "DirectGLES (Default)",
+                description = "Standard OpenGL ES 3.2 backend",
+                environment = mapOf(
+                    "MOBILEGL_BACKEND_TYPE" to "DirectGLES",
+                    "MOBILEGL_USE_ANGLE" to "0",
+                    "MG_ENABLE_ANGLE" to "0"
+                )
+            ),
+            RendererConfigOption(
+                id = "direct_gles_angle",
+                displayName = "DirectGLES + ANGLE",
+                description = "OpenGL ES over ANGLE Vulkan",
+                environment = mapOf(
+                    "MOBILEGL_BACKEND_TYPE" to "DirectGLES",
+                    "MOBILEGL_USE_ANGLE" to "1",
+                    "MG_ENABLE_ANGLE" to "1"
+                )
+            ),
+            RendererConfigOption(
+                id = "direct_vulkan",
+                displayName = "DirectVulkan (Magma)",
+                description = "Direct Vulkan backend via Magma",
+                environment = mapOf(
+                    "MOBILEGL_BACKEND_TYPE" to "DirectVulkan",
+                    "MOBILEGL_USE_ANGLE" to "0"
+                )
+            ),
+            RendererConfigOption(
+                id = "compatibility",
+                displayName = "Compatibility (Relaxed Semantics)",
+                description = "Relaxed core-profile rules & error suppression",
+                environment = mapOf(
+                    "MOBILEGL_BACKEND_TYPE" to "DirectGLES",
+                    "MOBILEGL_RELAXED_SEMANTICS" to "1",
+                    "MG_ENABLE_NO_ERROR" to "1",
+                    "MOBILEGL_COHERENT_AS_FLUSH" to "1"
+                )
+            ),
+            RendererConfigOption(
+                id = "high_performance",
+                displayName = "High Performance",
+                description = "Max GLSL cache, compute shaders & multidraw",
+                environment = mapOf(
+                    "MOBILEGL_BACKEND_TYPE" to "DirectGLES",
+                    "MG_ENABLE_ANGLE" to "0",
+                    "MG_ENABLE_NO_ERROR" to "1",
+                    "MG_MULTIDRAW_MODE" to "5",
+                    "MG_MAX_GLSL_CACHE_SIZE" to "256",
+                    "MG_ENABLE_EXT_COMPUTE" to "1",
+                    "MG_ENABLE_EXT_GL43" to "1"
+                )
+            )
+        )
+
+        fun createKryptonPresets(): List<RendererConfigOption> = listOf(
+            RendererConfigOption(
+                id = "krypton_gl31_gles3",
+                displayName = "OpenGL 3.1 / GLES 3 (Default)",
+                description = "Standard modern desktop GL 3.1 emulation",
+                environment = mapOf(
+                    "LIBGL_GL" to "31",
+                    "LIBGL_ES" to "3"
+                )
+            ),
+            RendererConfigOption(
+                id = "krypton_gl21_gles2",
+                displayName = "OpenGL 2.1 / GLES 2",
+                description = "Legacy compatibility for older Minecraft versions",
+                environment = mapOf(
+                    "LIBGL_GL" to "21",
+                    "LIBGL_ES" to "2"
+                )
+            ),
+            RendererConfigOption(
+                id = "krypton_perf",
+                displayName = "Performance (VBO + No Error)",
+                description = "VBO buffers enabled with error checks suppressed",
+                environment = mapOf(
+                    "LIBGL_GL" to "31",
+                    "LIBGL_ES" to "3",
+                    "LIBGL_VBO" to "1",
+                    "LIBGL_NOERROR" to "1"
+                )
+            )
+        )
+    }
+}
 
 /**
  * Unified descriptor for any selectable renderer (built-in or plugin).
@@ -73,6 +177,7 @@ data class PluginConfigData(
     val dlopenLibPaths: List<String> = emptyList(),
     val environment: Map<String, String> = emptyMap(),
     val jvmProperties: Map<String, String> = emptyMap(),
+    val configurations: List<RendererConfigOption> = emptyList(),
     val minMcVer: String? = null,
     val maxMcVer: String? = null
 ) {
@@ -185,6 +290,104 @@ data class PluginConfigData(
                 }
             }
 
+            val parsedConfigs = mutableListOf<RendererConfigOption>()
+
+            fun parseConfigOption(obj: JSONObject): RendererConfigOption? {
+                val cfgId = obj.optString("id").ifBlank { obj.optString("key") }
+                val cfgName = obj.optString("displayName").ifBlank {
+                    obj.optString("name").ifBlank { obj.optString("title").ifBlank { cfgId } }
+                }
+                if (cfgId.isBlank() && cfgName.isBlank()) return null
+                val desc = obj.optString("description").takeIf { it.isNotBlank() }
+                val cEnv = linkedMapOf<String, String>()
+                val cEnvObj = obj.optJSONObject("env") ?: obj.optJSONObject("environment")
+                if (cEnvObj != null) {
+                    val kIter = cEnvObj.keys()
+                    while (kIter.hasNext()) {
+                        val k = kIter.next()
+                        cEnv[k] = cEnvObj.optString(k)
+                    }
+                }
+                val cEnvArr = obj.optJSONArray("env") ?: obj.optJSONArray("environment")
+                if (cEnvArr != null) {
+                    for (i in 0 until cEnvArr.length()) {
+                        val item = cEnvArr.opt(i)
+                        if (item is JSONObject) {
+                            val k = item.optString("name").ifBlank { item.optString("key") }
+                            val v = item.optString("value")
+                            if (k.isNotBlank()) cEnv[k] = v
+                        }
+                    }
+                }
+                val cJvm = linkedMapOf<String, String>()
+                val cJvmArr = obj.optJSONArray("jvmArgs") ?: obj.optJSONArray("jvmProperties")
+                if (cJvmArr != null) {
+                    for (i in 0 until cJvmArr.length()) {
+                        val item = cJvmArr.opt(i)
+                        if (item is JSONObject) {
+                            val k = item.optString("name").ifBlank { item.optString("key") }
+                            val v = item.optString("value")
+                            if (k.isNotBlank()) cJvm[k] = v
+                        } else if (item is String) {
+                            val s = item.removePrefix("-D")
+                            if ('=' in s) {
+                                val p = s.split('=', limit = 2)
+                                cJvm[p[0].trim()] = p[1].trim()
+                            }
+                        }
+                    }
+                }
+                return RendererConfigOption(
+                    id = cfgId.ifBlank { cfgName.lowercase().replace(' ', '_') },
+                    displayName = cfgName.ifBlank { cfgId },
+                    description = desc,
+                    environment = cEnv,
+                    jvmProperties = cJvm
+                )
+            }
+
+            val configsArr = json.optJSONArray("configurations") ?: json.optJSONArray("presets")
+            if (configsArr != null) {
+                for (i in 0 until configsArr.length()) {
+                    val opt = configsArr.optJSONObject(i)?.let { parseConfigOption(it) }
+                    if (opt != null) parsedConfigs.add(opt)
+                }
+            }
+
+            val selectableArr = json.optJSONObject("env")?.optJSONArray("selectable")
+                ?: json.optJSONArray("selectable")
+            if (selectableArr != null) {
+                for (i in 0 until selectableArr.length()) {
+                    val selObj = selectableArr.optJSONObject(i) ?: continue
+                    val key = selObj.optString("key").ifBlank { selObj.optString("name") }
+                    val title = selObj.optString("title").ifBlank { key }
+                    val itemsArr = selObj.optJSONArray("values")
+                        ?: selObj.optJSONObject("items")?.optJSONArray("values")
+                    if (itemsArr != null && key.isNotBlank()) {
+                        for (j in 0 until itemsArr.length()) {
+                            val v = itemsArr.optString(j)
+                            if (v.isNotBlank()) {
+                                parsedConfigs.add(
+                                    RendererConfigOption(
+                                        id = "$key=$v",
+                                        displayName = if (title != key) "$title: $v" else v,
+                                        environment = mapOf(key to v)
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            val isMobileGl = rawId.contains("mobilegl", ignoreCase = true) ||
+                rawName.contains("mobilegl", ignoreCase = true) ||
+                rawName.contains("mobile gl", ignoreCase = true)
+
+            if (parsedConfigs.isEmpty() && isMobileGl) {
+                parsedConfigs.addAll(RendererConfigOption.createMobileGlPresets())
+            }
+
             return PluginConfigData(
                 id = rawId,
                 displayName = rawName,
@@ -193,6 +396,7 @@ data class PluginConfigData(
                 dlopenLibPaths = dlopenLibs,
                 environment = envMap,
                 jvmProperties = jvmProps,
+                configurations = parsedConfigs,
                 minMcVer = (json.optString("minMcVer").ifBlank { json.optString("minMCVer") }).takeIf { it.isNotBlank() },
                 maxMcVer = (json.optString("maxMcVer").ifBlank { json.optString("maxMCVer") }).takeIf { it.isNotBlank() }
             )

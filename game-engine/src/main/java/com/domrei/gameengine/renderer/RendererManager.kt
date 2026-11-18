@@ -77,6 +77,64 @@ class RendererManager(
         preferenceFile.writeText(id)
     }
 
+    fun getAvailableRendererConfigs(descriptor: RendererDescriptor): List<RendererConfigOption> {
+        if (descriptor.isPlugin && descriptor.pluginInfo != null) {
+            val plugin = descriptor.pluginInfo
+            if (plugin.configurations.isNotEmpty()) {
+                return plugin.configurations
+            }
+            val isMobileGl = plugin.id.contains("mobilegl", ignoreCase = true) ||
+                plugin.displayName.contains("mobilegl", ignoreCase = true) ||
+                plugin.displayName.contains("mobile gl", ignoreCase = true)
+            if (isMobileGl) {
+                return RendererConfigOption.createMobileGlPresets()
+            }
+            return listOf(
+                RendererConfigOption(
+                    id = "default",
+                    displayName = "Default",
+                    description = "Default plugin configuration"
+                )
+            )
+        }
+
+        return when (descriptor.builtInType) {
+            RendererType.MOBILE_GLUES -> RendererConfigOption.createMobileGlPresets()
+            RendererType.KRYPTON_WRAPPER -> RendererConfigOption.createKryptonPresets()
+            RendererType.CUSTOM_PLUGIN, null -> listOf(
+                RendererConfigOption(
+                    id = "default",
+                    displayName = "Default",
+                    description = "Standard configuration"
+                )
+            )
+        }
+    }
+
+    private fun getConfigFileForRenderer(rendererId: String): File {
+        val safeId = rendererId.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        return File(externalRenderersDir, "config_${safeId}.txt")
+    }
+
+    fun getSelectedRendererConfig(descriptor: RendererDescriptor): RendererConfigOption {
+        val options = getAvailableRendererConfigs(descriptor)
+        val file = getConfigFileForRenderer(descriptor.id)
+        val savedId = runCatching {
+            if (file.isFile) file.readText().trim() else null
+        }.getOrNull()
+        return options.firstOrNull { it.id == savedId }
+            ?: options.firstOrNull()
+            ?: RendererConfigOption("default", "Default")
+    }
+
+    fun setSelectedRendererConfig(descriptor: RendererDescriptor, configOption: RendererConfigOption) {
+        val file = getConfigFileForRenderer(descriptor.id)
+        runCatching {
+            externalRenderersDir.mkdirs()
+            file.writeText(configOption.id)
+        }
+    }
+
     fun getAvailableRenderers(): List<RendererDescriptor> {
         val list = mutableListOf<RendererDescriptor>()
         list.add(RendererDescriptor.fromBuiltIn(RendererType.MOBILE_GLUES))
@@ -323,6 +381,7 @@ class RendererManager(
                         dlopenLibPaths = finalConfig.dlopenLibPaths,
                         environment = finalConfig.environment,
                         jvmProperties = finalConfig.jvmProperties,
+                        configurations = finalConfig.configurations,
                         sourcePackage = appInfo.packageName,
                         isInstalledApp = true,
                         minMcVer = finalConfig.minMcVer,
@@ -400,6 +459,7 @@ class RendererManager(
             dlopenLibPaths = config.dlopenLibPaths,
             environment = config.environment,
             jvmProperties = config.jvmProperties,
+            configurations = config.configurations,
             sourceFile = targetArchive,
             isInstalledApp = false,
             minMcVer = config.minMcVer,
@@ -588,7 +648,10 @@ class RendererManager(
             id = fallbackId,
             displayName = fallbackName,
             glLibFileName = primaryGl,
-            eglLibFileName = eglLib
+            eglLibFileName = eglLib,
+            configurations = if (fallbackId.contains("mobilegl", ignoreCase = true)) {
+                RendererConfigOption.createMobileGlPresets()
+            } else emptyList()
         )
     }
 
@@ -639,23 +702,30 @@ class RendererManager(
 
     suspend fun prepareRenderer(
         descriptor: RendererDescriptor = getSelectedRendererDescriptor(),
+        configOption: RendererConfigOption? = null,
         abi: RuntimeAbi = RuntimeAbi.detectDeviceAbi(),
         mobileGluesConfig: MobileGluesConfig = MobileGluesConfig(),
         kryptonConfig: KryptonWrapperConfig = KryptonWrapperConfig(),
         forceReinstall: Boolean = false,
         onProgress: (String, Float) -> Unit = { _, _ -> }
-    ): Result<PreparedRenderer> {
-        if (descriptor.isPlugin && descriptor.pluginInfo != null) {
-            return preparePluginRenderer(
-                plugin = descriptor.pluginInfo,
-                abi = abi,
-                forceReinstall = forceReinstall,
-                onProgress = onProgress
-            )
+    ): Result<PreparedRenderer> = withContext(Dispatchers.IO) {
+        val effectiveConfig = configOption ?: getSelectedRendererConfig(descriptor)
+        if (descriptor.isPlugin) {
+            val plugin = descriptor.pluginInfo ?: getInstalledPlugins(abi).firstOrNull { "plugin:${it.id}" == descriptor.id }
+            if (plugin != null) {
+                return@withContext preparePluginRenderer(
+                    plugin = plugin,
+                    configOption = effectiveConfig,
+                    abi = abi,
+                    forceReinstall = forceReinstall,
+                    onProgress = onProgress
+                )
+            }
         }
         val type = descriptor.builtInType ?: RendererType.MOBILE_GLUES
-        return prepareRenderer(
+        return@withContext prepareRenderer(
             type = type,
+            configOption = effectiveConfig,
             abi = abi,
             mobileGluesConfig = mobileGluesConfig,
             kryptonConfig = kryptonConfig,
@@ -666,10 +736,12 @@ class RendererManager(
 
     suspend fun preparePluginRenderer(
         plugin: RendererPlugin,
+        configOption: RendererConfigOption? = null,
         abi: RuntimeAbi = RuntimeAbi.detectDeviceAbi(),
         forceReinstall: Boolean = false,
         onProgress: (String, Float) -> Unit = { _, _ -> }
     ): Result<PreparedRenderer> = withContext(Dispatchers.IO) {
+        val activeConfig = configOption ?: getSelectedRendererConfig(RendererDescriptor.fromPlugin(plugin))
         runCatching {
             onProgress("Preparing ${plugin.displayName} plugin...", 0.1f)
 
@@ -733,6 +805,7 @@ class RendererManager(
             envVars["LIBGL_ES"] = "3"
             envVars["LIBGL_EGL"] = plugin.eglLibFileName
             envVars.putAll(plugin.environment)
+            envVars.putAll(activeConfig.environment)
 
             val jvmProps = linkedMapOf<String, String>()
             jvmProps["org.lwjgl.opengl.libname"] = primaryGlFile.name
@@ -740,6 +813,7 @@ class RendererManager(
             jvmProps["domrei.renderer.id"] = plugin.id
             jvmProps["domrei.renderer.lib"] = primaryGlFile.absolutePath
             jvmProps.putAll(plugin.jvmProperties)
+            jvmProps.putAll(activeConfig.jvmProperties)
 
             val freetypeSo = File(activeLibDir, "libfreetype.so")
             if (freetypeSo.isFile) {
@@ -770,12 +844,33 @@ class RendererManager(
      */
     suspend fun prepareRenderer(
         type: RendererType = getSelectedRenderer(),
+        configOption: RendererConfigOption? = null,
         abi: RuntimeAbi = RuntimeAbi.detectDeviceAbi(),
         mobileGluesConfig: MobileGluesConfig = MobileGluesConfig(),
         kryptonConfig: KryptonWrapperConfig = KryptonWrapperConfig(),
         forceReinstall: Boolean = false,
         onProgress: (String, Float) -> Unit = { _, _ -> }
     ): Result<PreparedRenderer> = withContext(Dispatchers.IO) {
+        val activeConfig = configOption ?: getSelectedRendererConfig(RendererDescriptor.fromBuiltIn(type))
+        var effectiveMgConfig = mobileGluesConfig
+        if (activeConfig.environment["MG_ENABLE_ANGLE"] == "1" || activeConfig.environment["MOBILEGL_USE_ANGLE"] == "1") {
+            effectiveMgConfig = effectiveMgConfig.copy(enableANGLE = 1)
+        }
+        if (activeConfig.environment["MG_ENABLE_NO_ERROR"] == "1") {
+            effectiveMgConfig = effectiveMgConfig.copy(enableNoError = 1)
+        }
+        activeConfig.environment["MG_MULTIDRAW_MODE"]?.toIntOrNull()?.let {
+            effectiveMgConfig = effectiveMgConfig.copy(multidrawMode = it)
+        }
+        activeConfig.environment["MG_MAX_GLSL_CACHE_SIZE"]?.toIntOrNull()?.let {
+            effectiveMgConfig = effectiveMgConfig.copy(maxGlslCacheSize = it)
+        }
+        if (activeConfig.environment["MG_ENABLE_EXT_COMPUTE"] == "1") {
+            effectiveMgConfig = effectiveMgConfig.copy(enableExtComputeShader = 1)
+        }
+        if (activeConfig.environment["MG_ENABLE_EXT_GL43"] == "1") {
+            effectiveMgConfig = effectiveMgConfig.copy(enableExtGL43 = 1)
+        }
         runCatching {
             val extAbiDir = getRendererAbiDir(externalRenderersDir, type, abi)
             val execAbiDir = getRendererAbiDir(internalExecRenderersDir, type, abi)
@@ -838,7 +933,7 @@ class RendererManager(
                 RendererType.MOBILE_GLUES -> {
                     val mgDir = File(externalRenderersDir, "mobileglues")
                     mgDir.mkdirs()
-                    val jsonStr = mobileGluesConfig.toJsonString()
+                    val jsonStr = effectiveMgConfig.toJsonString()
                     File(mgDir, "mg_config.json").writeText(jsonStr)
                     File(mgDir, "config.json").apply {
                         writeText(jsonStr)
@@ -852,14 +947,16 @@ class RendererManager(
                 type = type,
                 nativeLibFile = activeLibFile,
                 configFile = configFile,
-                mobileGluesConfig = mobileGluesConfig,
+                mobileGluesConfig = effectiveMgConfig,
                 kryptonConfig = kryptonConfig
-            )
+            ).toMutableMap()
+            envVars.putAll(activeConfig.environment)
 
             val jvmProps = buildRendererJvmProperties(
                 type = type,
                 nativeLibFile = activeLibFile
-            )
+            ).toMutableMap()
+            jvmProps.putAll(activeConfig.jvmProperties)
 
             onProgress("${type.displayName} ready", 1f)
 
